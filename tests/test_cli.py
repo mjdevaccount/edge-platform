@@ -58,4 +58,10 @@ def test_unreadable_or_invalid_input_is_blind_exit_2(capsys, tmp_path, argv):
 
 def test_senders_lists_the_registry_and_names_the_uncounted(capsys):
     rc, out = _run(capsys, "senders")
-    assert rc == 0 and "1 uncounted: gatus" in out
+    assert rc == 0 and "3 uncounted: grafana-contact-points, trade-infra-deploy-bluegreen, gatus" in out
+
+
+def test_a_usage_error_is_blind_and_help_is_clean(capsys):
+    assert _run(capsys, "no-such-command")[0] == 2  # argparse's own exit, never read as 1 = findings
+    assert _run(capsys, "am-night")[0] == 2  # missing required argument
+    assert _run(capsys, "--help")[0] == 0

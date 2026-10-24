@@ -88,13 +88,17 @@ def run(a: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Windows python prints CRLF; bash evals these lines and a stray CR would ride into a value.
-    sys.stdout.reconfigure(newline=NL)
-    a = _p(argv)
+    cmd = "?"
     try:
+        # Windows python prints CRLF; bash evals these lines and a stray CR would ride into a value.
+        sys.stdout.reconfigure(newline=NL)
+        a = _p(argv)
+        cmd = a.cmd
         return run(a)
+    except SystemExit as exc:  # argparse: --help is 0, a usage error is 2 -- never 1 (= findings)
+        return 0 if exc.code in (0, None) else 2
     except Exception as exc:  # ANY crash (bad JSON/YAML, missing key, unreadable file) is BLIND, never clean
-        print(f"edge-notify {a.cmd}: BLIND -- {exc.__class__.__name__}: {exc}", file=sys.stderr)
+        print(f"edge-notify {cmd}: BLIND -- {exc.__class__.__name__}: {exc}", file=sys.stderr)
         return 2
 
 

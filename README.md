@@ -23,17 +23,19 @@ on the home IP shares them. Three files say everything about that budget:
 | `ntfy-policy.cases.json` | the literal cases every reader runs in its own language, and `policy_sha256` pinning the policy bytes | each consumer's CI |
 | `ntfy-publishers.json` | WHO spends it: every sender, its route (`library` / `direct` / `am-webhook` / `gatus` / `ci`) and mode (`gated` / `counted` / `exempt` + why / `uncounted` + what is owed) | `publishers.py` |
 
-THIS REPO IS CANONICAL for all three. v0.1.0 ships the policy bytes consumers already carried
-(sha256 `186af626…`) unchanged, so no copy had to move; the policy's own `about` text still names
-edge-host as canonical and is corrected in the first release that changes the bytes. A vendored
-copy in a consumer is transitional: it proves itself equal with `edge-notify check-copy`, and its
-exit is pinning this release instead.
+CANONICAL TODAY: this repo for `ntfy-publishers.json`; **edge-host's `policy/ntfy-policy.json`
+for the policy and its cases** -- the copy here is a parity-checked copy (mcp
+`scripts/lint_script_parity.py` PARITY_PATHS), byte-identical (sha256 `186af626…`), so no consumer
+had to move. The policy's canonical home moves HERE at v0.2, in the same release that edits the
+policy's `about` text, and every copy changes in that round. A vendored copy in a consumer is
+transitional: it proves itself equal with `edge-notify check-copy`, and its exit is pinning this
+release instead.
 
 ### `edge-notify` (the CLI consumers run)
 
 | command | for |
 |---|---|
-| `edge-notify am-night alertmanager.yml` | trade-infra CI: the Alertmanager `quiet-night` mute equals `policy.night`, minute-exact, and some route actually mutes with it |
+| `edge-notify am-night alertmanager.yml` | trade-infra CI: the Alertmanager `quiet-night` mute equals `policy.night`, minute-exact, AND synthetic p2 / unlabelled / p1 alerts routed through the tree the way Alertmanager does land on a route muted with exactly that interval (p2) or never time-gated (p1) |
 | `edge-notify check-copy FILE` | a vendored policy copy is byte-identical (LF) to this release |
 | `edge-notify check-pin [POLICY [CASES]]` | the cases file pins the policy's sha256 |
 | `edge-notify shell` / `rows` | `_ENP_*` lines for lib-notify.sh; the shared cases as TAB rows for a bash test |

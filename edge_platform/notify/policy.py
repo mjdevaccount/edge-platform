@@ -155,6 +155,9 @@ def parse(raw: dict) -> NtfyPolicy:
         if not all(isinstance(r[f], bool) for f in _FLAGS):
             raise ValueError(f"tiers.{t}: a flag is not a bool")
         tiers[t] = TierRule(*(r[f] for f in _FLAGS), _int(r["cooldown_s"], f"tiers.{t}.cooldown_s"))
+    # 24 is allowed on purpose: start 24 / end 0 is lib-notify.sh's "never night" (h>=24 || h<0
+    # is never true). The llm box's lib-notify.ps1 accepts 0..23 only, so a policy that ever
+    # ships 24 must move that reader in the same release (reviewer 401, finding 5).
     start, end = _int(night["start_hour"], "night.start_hour", 0, 24), _int(night["end_hour"], "night.end_hour", 0, 24)
     if start <= end:
         raise ValueError(f"night window {start}..{end} does not wrap midnight; every reader assumes it does")
