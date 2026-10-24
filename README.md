@@ -35,7 +35,7 @@ release instead.
 
 | command | for |
 |---|---|
-| `edge-notify am-night alertmanager.yml` | trade-infra CI: the Alertmanager `quiet-night` mute equals `policy.night`, minute-exact, AND synthetic p2 / unlabelled / p1 alerts routed through the tree the way Alertmanager does land on a route muted with exactly that interval (p2) or never time-gated (p1) |
+| `edge-notify am-night alertmanager.yml` | trade-infra CI: the Alertmanager `quiet-night` mute equals `policy.night`, minute-exact, AND synthetic p2 / unlabelled / p1 alerts routed through the tree the way Alertmanager does land on a route muted with exactly that interval (p2) or never time-gated (p1). LIMITS (reviewer 404, owed v0.2): probes vary ONE extra label at a time and only from `=` / literal `=~` matchers, never `tier` itself, so nested multi-label routes, `x!=""` presence matchers and an unmuted odd tier can still pass; one matcher per string |
 | `edge-notify check-copy FILE` | a vendored policy copy is byte-identical (LF) to this release |
 | `edge-notify check-pin [POLICY [CASES]]` | the cases file pins the policy's sha256 |
 | `edge-notify shell` / `rows` | `_ENP_*` lines for lib-notify.sh; the shared cases as TAB rows for a bash test |
