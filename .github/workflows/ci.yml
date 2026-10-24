@@ -1,0 +1,42 @@
+# edge-platform's own gate: ruff (lint + format) and the tests against the locked deps, the
+# packaged CLI run the way consumers run it, and gitleaks over history through ci-kit.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+      - run: uv sync --frozen
+      - name: ruff
+        run: |
+          uv run ruff check --output-format=github .
+          uv run ruff format --check .
+      - name: tests
+        run: uv run pytest -q
+      - name: the built wheel carries its data files and its CLI works
+        run: |
+          uv build
+          uvx --from dist/edge_platform-*.whl edge-notify check-pin
+          uvx --from dist/edge_platform-*.whl edge-notify senders
+
+  gitleaks:
+    name: gitleaks (secret scan)
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: mjdevaccount/ci-kit/.github/workflows/gitleaks.yml@v1
+    with:
+      mode: history

@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "about": [
+    "THE ntfy.sh push budget, declared once. Every sender on the home IP reads THIS file instead of",
+    "carrying its own copy of the numbers: edge-host scripts/lib-notify.sh (bash), trade-data",
+    "service/adapters/ntfy_client.py (python, in the service container), mattpc-llm-stack",
+    "monitoring/lib-notify.ps1 (PowerShell, the llm box). Canonical copy: edge-host",
+    "policy/ntfy-policy.json. The others are BYTE-IDENTICAL copies at the same path, checked daily",
+    "by mcp scripts/lint_script_parity.py; each repo's CI runs policy/ntfy-policy.cases.json through",
+    "its own library and pins this file by sha256 (LF-normalised) in that cases file, so an edit to",
+    "one copy fails that repo's CI. To change the policy: edit here, update policy_sha256 in the",
+    "cases file (and the cases the change moves), then copy BOTH files byte-for-byte into the other",
+    "two repos in the same round.",
+    "WHY: ntfy.sh gives an anonymous publisher 250 messages per UTC day PER SOURCE IP, shared by",
+    "Alertmanager, these libraries, Windmill, Grafana and the llm box. 2026-09-30..10-04 it was spent",
+    "by midday five days running and every real page 429'd."
+  ],
+  "quota": {
+    "daily_messages": 250,
+    "basis": "source ip, UTC day",
+    "account_path": "/v1/account",
+    "reserve": 75,
+    "reserve_note": "an ordinary push may not spend the last `reserve` messages of the UTC day; read from the destination (GET <base>/v1/account -> stats.messages_remaining). A probe that cannot answer is BLIND and blind fails OPEN: a lost page is worse than a noisy one.",
+    "reserve_exempt": {
+      "am-heartbeat-watch": "pager health: 'EDGE PAGER DOWN' is the page the reserve is kept FOR. A low quota is when Alertmanager's own heartbeat 429s, so holding this page to the digest would hide the outage exactly when it is happening; the episode stamp already limits it to one push per episode.",
+      "notify-canary": "pager health: 'DELIVERY CANARY FAILED' says the paging path is broken; it fires at most once per drill, and a drill fails most often when the quota is short."
+    }
+  },
+  "publisher_cap": {
+    "per_utc_day": 40,
+    "counted_from": "the send ledger (layout.ledger_dir): one line per ACCEPTED push",
+    "exempt": {
+      "trade-data-market": "decision-tape trading signals on their own topic: 50-88 accepted per day measured 2026-10-19..23 from /var/lib/edge-notify/sent, so a cap of 40 would drop real signals mid-session. Bounded by the reserve instead (ntfy_client, 2026-10-14)."
+    }
+  },
+  "night": {
+    "tz": "America/New_York",
+    "start_hour": 22,
+    "end_hour": 7,
+    "note": "start inclusive, end exclusive. A p2 inside the window is deferred to the 07:00 ET flush, where the replay budget (reserve) applies. Only a sender with a flush defers (edge-host lib-notify, trade-data via the bind-mounted state dir); the llm box has none and pushes."
+  },
+  "tiers": {
+    "p1": {"pushes": true, "capped": false, "reserve": false, "night_gate": false, "cooldown_s": 900,
+           "note": "wake the operator: its own DND-overriding topic, never capped, never held. It is what the reserve is FOR. Nothing defaults to p1."},
+    "p2": {"pushes": true, "capped": true, "reserve": true, "night_gate": true, "cooldown_s": 3600,
+           "note": "ops attention: order is cap -> night defer -> reserve -> push. A hold needs somewhere to land (digest / held log); with none it pushes."},
+    "p3": {"pushes": false, "capped": false, "reserve": false, "night_gate": false, "cooldown_s": 0,
+           "note": "digest material: appended to the daily 08:00 digest, never pushed on its own; with no digest to write it pushes at low priority."}
+  },
+  "layout": {
+    "state_dir": "/var/lib/edge-notify (edge-host + the bind-mount in trade-data's containers); C:\\llama\\monitoring\\state on the llm box",
+    "ledger_dir": "sent",
+    "ledger_path": "<state>/<ledger_dir>/<UTC YYYYMMDD>/<publisher>",
+    "ledger_line": "<UTC HH:MM:SS> <priority>",
+    "publisher_safe_chars": "A-Za-z0-9._-",
+    "publisher_max_len": 60,
+    "deferred_dir": "deferred",
+    "undelivered_dir": "undelivered",
+    "digest_file": "digest/lines"
+  }
+}

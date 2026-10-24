@@ -1,0 +1,41 @@
+# A `v*` tag builds the wheel + sdist from the tagged commit and attaches them to a GitHub release,
+# together with the notify data files and a SHA256SUMS over everything. Consumers pin:
+#   Python:      edge-platform @ https://github.com/mjdevaccount/edge-platform/releases/download/vX.Y.Z/edge_platform-X.Y.Z-py3-none-any.whl
+#   CI (any):    uvx --from <that wheel URL> edge-notify am-night|check-copy|senders ...
+#   non-Python:  the release asset ntfy-policy.json, verified against SHA256SUMS
+# The tag must match pyproject's version, or the release is refused before anything uploads.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: tag matches pyproject and package version
+        run: |
+          v=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != pyproject v$v"; exit 1; }
+          grep -q "__version__ = \"$v\"" edge_platform/__init__.py || { echo "::error::edge_platform.__version__ != $v"; exit 1; }
+      - run: uv sync --frozen
+      - run: uv run pytest -q
+      - run: uv build
+      - name: notify assets + SHA256SUMS
+        run: |
+          cp edge_platform/notify/ntfy-policy.json edge_platform/notify/ntfy-policy.cases.json \
+             edge_platform/notify/ntfy-publishers.json dist/
+          (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # no --clobber fallback: a published asset's bytes are what consumers pinned a hash of
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes

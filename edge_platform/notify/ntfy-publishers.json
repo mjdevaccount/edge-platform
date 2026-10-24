@@ -1,0 +1,109 @@
+{
+  "schema": 1,
+  "about": [
+    "EVERY sender that can post to ntfy.sh from the home IP, declared once. ntfy.sh counts 250",
+    "messages per UTC day per SOURCE IP, so a sender missing from this list is spending a budget",
+    "nobody can see. ntfy-policy.json says HOW MUCH may be spent; this file says WHO spends it.",
+    "route: library = calls a policy reader before each push; direct = posts itself; am-webhook =",
+    "Alertmanager's own webhook; gatus = Gatus's ntfy alert provider; ci = a CI job step.",
+    "mode: gated = reads the policy and decides before every push, and writes the send ledger;",
+    "counted = does not read the policy first, but every accepted push lands in the ledger after the",
+    "fact (counted_by says where); exempt = declared not to need either, with the reason;",
+    "uncounted = KNOWN to spend the quota with nothing counting it -- allowed only with `owed`.",
+    "Every name in the policy's cap/reserve exemptions must be a publisher declared here.",
+    "Completeness is the estate send-point scan's job, not this file's: it fails on a send point",
+    "in any repo's code that no entry here declares."
+  ],
+  "senders": [
+    {
+      "name": "edge-host-lib-notify",
+      "repo": "edge-host",
+      "where": ["scripts/lib-notify.sh"],
+      "route": "library",
+      "mode": "gated",
+      "publishers": ["am-heartbeat-watch", "notify-canary"],
+      "publisher_rule": "the calling script's basename (edge_notify's caller)",
+      "why": "the bash library every edge-host script sources; flush/drain/digest replay its spools under the same budget."
+    },
+    {
+      "name": "edge-host-notify-fallback",
+      "repo": "edge-host",
+      "where": ["scripts/lib-notify-fallback.sh"],
+      "route": "direct",
+      "mode": "exempt",
+      "publishers": [],
+      "why": "the LOUD fallback for a script whose lib-notify.sh would not source: the policy reader is exactly what failed. p1/p2 only, per-(script,title) cooldown 900s/3600s, stamps fallback/<script> that edge-sweep's notify-fallback check reads (edge-host#508)."
+    },
+    {
+      "name": "trade-data-ntfy-client",
+      "repo": "trade-data",
+      "where": ["service/adapters/ntfy_client.py"],
+      "route": "library",
+      "mode": "gated",
+      "publishers": ["trade-data", "trade-data-market"],
+      "why": "the one push path in the service containers (service/platform/notify.py notify(Notice) -> Delivery); writes the shared ledger through the bind-mounted state dir."
+    },
+    {
+      "name": "trade-data-windmill-error-handler",
+      "repo": "trade-data",
+      "where": ["windmill/u/admin/flow_error_handler.py"],
+      "route": "library",
+      "mode": "gated",
+      "publishers": ["windmill-error-handler"],
+      "why": "a Windmill script runs alone and cannot read the policy file, so it carries the cap/reserve as literals; trade-data tests/test_ntfy_policy.py pins those literals to the policy at both boundaries."
+    },
+    {
+      "name": "llmbox-lib-notify",
+      "repo": "mattpc-llm-stack",
+      "where": ["monitoring/lib-notify.ps1"],
+      "route": "library",
+      "mode": "gated",
+      "publishers": [],
+      "publisher_rule": "Send-EdgeNtfy -Publisher (e.g. llmbox-windows-update, llmbox-llamacpp-upgrade)",
+      "why": "the llm box's PowerShell reader; no night flush there, so a night p2 pushes (policy night.note)."
+    },
+    {
+      "name": "llmbox-raw-fallbacks",
+      "repo": "mattpc-llm-stack",
+      "where": ["monitoring/crashloop-watch.ps1", "monitoring/edge-watchdog.ps1", "monitoring/health-probe.ps1"],
+      "route": "direct",
+      "mode": "exempt",
+      "publishers": [],
+      "why": "raw Invoke-RestMethod posts used ONLY when lib-notify.ps1 is absent: the library-absent fallback, decided 2026-10-24 (a lost page is worse than a noisy one)."
+    },
+    {
+      "name": "alertmanager",
+      "repo": "trade-infra",
+      "where": ["infra/alertmanager/alertmanager.yml"],
+      "route": "am-webhook",
+      "mode": "counted",
+      "publishers": ["alertmanager"],
+      "counted_by": "edge-host scripts/am-heartbeat-watch.sh am_ledger_sync: webhook notifications_total - failed_total, appended to the ledger as publisher alertmanager",
+      "why": "Alertmanager POSTs to ntfy.sh by webhook and reads no policy; its night mute is pinned to policy.night by `edge-notify am-night` in trade-infra CI."
+    },
+    {
+      "name": "gatus",
+      "repo": "home-host",
+      "where": ["observer/gatus/config.yaml"],
+      "route": "gatus",
+      "mode": "uncounted",
+      "publishers": [],
+      "owed": "the `self` group and the duplicate public `edge-host ping` alert post to PUBLIC ntfy.sh from the observer VM, whose egress IS the home IP (measured 2026-10-24). They land in edge_ntfy_sent_unattributed. Closing this = count them (mode counted) -- round 6 gap 4.",
+      "why": "the off-box observer must page when edge-host itself is down, so it cannot depend on edge-host's library."
+    },
+    {
+      "name": "ci-github-hosted",
+      "repo": "estate",
+      "where": [
+        "ci-kit:.github/workflows/pr-autoupdate.yml",
+        "trade-data:.github/workflows/nightly.yml",
+        "trade-data:.github/workflows/review-gate.yml",
+        "plans:.github/workflows/ci.yml"
+      ],
+      "route": "ci",
+      "mode": "exempt",
+      "publishers": [],
+      "why": "every CI ntfy push step runs on a GitHub-HOSTED runner (runs-on: ubuntu-latest; runner_name 'GitHub Actions 10000xxxxx' measured 2026-10-24), whose egress is not the home IP, so it cannot spend the per-IP quota. A push step on a self-hosted (vars.CI_RUNNER) job would."
+    }
+  ]
+}
