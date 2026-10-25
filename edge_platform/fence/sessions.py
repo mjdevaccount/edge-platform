@@ -186,6 +186,7 @@ def write_cache(doc: dict[str, Any], path: Path) -> None:
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".sessions.", suffix=".json")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump(doc, fh, separators=(",", ":"))
+    os.chmod(tmp, 0o644)  # a public calendar; mkstemp's 0600 would hide it from other users' callers
     os.replace(tmp, path)
 
 
