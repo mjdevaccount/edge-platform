@@ -6,10 +6,10 @@ in ONE versioned place instead of hand copies kept equal by comments.
 | tenant | what | status |
 |---|---|---|
 | `edge_platform.notify` | the ntfy.sh push budget: the policy file, its reader, the declared sender registry, the Alertmanager night-window check | v0.2.0 |
-| `edge_platform.fence` | the trading-hours deploy fence: "is a change to this tier allowed now, and until when?" (plans `deploy-fence-replacement` §6) | v0.3.0, no caller yet |
+| `edge_platform.fence` | the trading-hours deploy fence: "is a change to this tier allowed now, and until when?" (plans `deploy-fence-replacement` §6) | v0.3.1, no caller yet |
 
 ```
-pip install "edge-platform @ https://github.com/mjdevaccount/edge-platform/releases/download/v0.3.0/edge_platform-0.3.0-py3-none-any.whl"
+pip install "edge-platform @ https://github.com/mjdevaccount/edge-platform/releases/download/v0.3.1/edge_platform-0.3.1-py3-none-any.whl"
 pip install "edge-platform[db] @ ..."   # the edge box: also reads quant.market_sessions (psycopg)
 ```
 
@@ -22,7 +22,7 @@ that each compute the same window: edge-host `rth-guard.sh` / `lib-clock.sh` / `
 
 | file | says |
 |---|---|
-| `fence-policy.json` | per tier: fenced or not, pads before the open / after the close (15 / 35 min), blackouts, and the blind superset (Mon-Fri 09:15-16:35 ET). Holidays and half-day afternoons are OPEN (operator call 1, 2026-10-24) |
+| `fence-policy.json` | per tier: fenced or not, pads before the open / after the close (15 / 35 min), blackouts, and the blind superset (Mon-Fri 09:15-16:35 ET). Holidays and half-day afternoons are OPEN (operator call 1, 2026-10-24); tiers `ui` and `quant` are OPEN in the session (operator decision 2026-10-21); an unknown tier is exit 2 |
 | `sessions-bundled.json` | XNYS sessions ~2 years ahead from exchange_calendars (`scripts/gen_bundled_sessions.py`); CI fails when < 180 days remain |
 
 The session table comes from the first source that answers: `quant.market_sessions` (`--dsn` /

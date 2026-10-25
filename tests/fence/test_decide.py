@@ -86,8 +86,31 @@ def test_blackout(tmp_path: Path, loaded: Loaded) -> None:
 
 def test_every_tier_in_the_spec_is_declared() -> None:
     pol = load_policy()
-    assert set(pol.tiers) == {"service", "quant", "ui", "infra", "windmill", "observer", "pve", "llmbox"}
+    assert set(pol.tiers) == {
+        "service",
+        "quant",
+        "ui",
+        "grounder",
+        "infra",
+        "windmill",
+        "adhoc",
+        "observer",
+        "pve",
+        "llmbox",
+    }
     assert all(t.before == 15 * M and t.after == 35 * M for t in pol.tiers.values())
+
+
+def test_ui_and_quant_are_open_in_the_session(loaded: Loaded) -> None:
+    """Operator decision 2026-10-21 (edge-host lib-deploy.sh deploy_tier_rth_open): ui and quant ship
+    inside the session; every other tier is fenced, and an unknown tier is an error, never open."""
+    pol = load_policy()
+    assert {k for k, t in pol.tiers.items() if not t.fenced} == {"ui", "quant"}
+    for tier in ("ui", "quant"):
+        d = decide(tier, at=et("2025-11-26T10:00"), loaded=loaded)
+        assert d.allowed and d.reason == "tier is not fenced"
+    for tier in ("grounder", "adhoc"):
+        assert not decide(tier, at=et("2025-11-26T10:00"), loaded=loaded).allowed
 
 
 def test_unknown_tier_and_bad_policy_are_errors(tmp_path: Path, loaded: Loaded) -> None:
