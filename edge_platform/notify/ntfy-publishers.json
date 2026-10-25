@@ -80,7 +80,7 @@
       "mode": "counted",
       "publishers": ["alertmanager"],
       "counted_by": "edge-host scripts/am-heartbeat-watch.sh am_ledger_sync: webhook notifications_total - failed_total, appended to the ledger as publisher alertmanager",
-      "why": "Alertmanager POSTs to ntfy.sh by webhook and reads no policy. Its night mute is a hand copy of policy.night; `edge-notify am-night` (this package) is the check, and pinning it in trade-infra CI is OWED (round 6 gap 3, lands after this release)."
+      "why": "Alertmanager POSTs to ntfy.sh by webhook and reads no policy. Its night mute is a hand copy of policy.night; `edge-notify am-night` (this package) is the check, and trade-infra CI runs it on every PR (ci.yml python job, trade-infra#716), with must-fire copies (an hour-late window, an unmuted p2 route) that must go red."
     },
     {
       "name": "observer-alertmanager",
@@ -114,12 +114,12 @@
     {
       "name": "gatus",
       "repo": "home-host",
-      "where": ["observer/gatus/config.yaml"],
+      "where": ["observer/gatus/config.yaml", "observer/gatus_ntfysh_count.py"],
       "route": "gatus",
-      "mode": "uncounted",
-      "publishers": [],
-      "owed": "the `self` group and the duplicate public `edge-host ping` alert post to PUBLIC ntfy.sh from the observer VM, whose egress IS the home IP (measured 2026-10-24). They land in edge_ntfy_sent_unattributed. Closing this = count them (mode counted) -- round 6 gap 4.",
-      "why": "the off-box observer must page when edge-host itself is down, so it cannot depend on edge-host's library."
+      "mode": "counted",
+      "publishers": ["gatus"],
+      "counted_by": "home-host observer/gatus_ntfysh_count.py counts Gatus's send lines for every alert resolving to ntfy.sh (the `self` group + the duplicate public `edge-host ping` page) into the observer's node-exporter; edge-host scripts/am-heartbeat-watch.sh gatus_ledger_sync appends the delta to the ledger as publisher gatus. The counter is watched by GatusNtfyshCountBlind (home-host observer/prometheus/pager-alerts.yml); the edge-host read by edge_ntfy_gatus_counter_ok.",
+      "why": "the off-box observer must page when edge-host itself is down, so it cannot depend on edge-host's library: counted after the fact, never gated. Its egress IS the home IP (measured 2026-10-24)."
     },
     {
       "name": "ci-github-hosted",
