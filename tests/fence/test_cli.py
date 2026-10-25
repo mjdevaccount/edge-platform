@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -119,3 +121,18 @@ def test_textfile_samples_are_exact(tmp_path: Path) -> None:
     prom = tf.read_text(encoding="utf-8")
     assert 'result="allow",source="cache"} 1234568' in prom
     assert 'edge_fence_last_decision_timestamp_seconds{tier="service"} 1792895201' in prom
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid"), reason="POSIX file modes")
+def test_written_files_are_world_readable(tmp_path: Path) -> None:
+    """node_exporter scrapes as ANOTHER user (nobody on the edge box): a 0600 textfile was
+    'permission denied' on every scrape and no decision reached Prometheus (v0.3.4)."""
+    from edge_platform.fence.cli import bump_textfile
+    from edge_platform.fence.sessions import write_cache
+
+    tf = tmp_path / "edge_fence.prom"
+    bump_textfile(tf, "service", "allow", "cache", 1792895200.0)
+    assert stat.S_IMODE(tf.stat().st_mode) == 0o644
+    cache = tmp_path / "sessions.json"
+    write_cache({"schema": 1}, cache)
+    assert stat.S_IMODE(cache.stat().st_mode) == 0o644

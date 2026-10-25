@@ -1,6 +1,6 @@
 [project]
 name = "edge-platform"
-version = "0.3.3"
+version = "0.3.4"
 description = "EDGE's shared platform package: the ntfy.sh push budget (notify) and the trading-hours deploy fence (fence)."
 readme = "README.md"
 license = "MIT"

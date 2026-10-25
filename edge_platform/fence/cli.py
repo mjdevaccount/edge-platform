@@ -108,6 +108,9 @@ def bump_textfile(path: Path, tier: str, result: str, source: str, now: float) -
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".edge_fence.", suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(NL.join(out) + NL)
+    # mkstemp creates 0600; node_exporter runs as another user (nobody on the edge box) and got
+    # "permission denied" on every scrape, so no decision reached Prometheus (v0.3.4).
+    os.chmod(tmp, 0o644)
     os.replace(tmp, path)
 
 
