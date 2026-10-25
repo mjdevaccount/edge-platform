@@ -48,8 +48,8 @@ def test_exit_codes_and_record(capsys: pytest.CaptureFixture[str], cache: Path, 
 
 def test_epoch_and_offset_instants(capsys: pytest.CaptureFixture[str], cache: Path) -> None:
     sat = int(dt.datetime(2025, 11, 29, 17, tzinfo=dt.UTC).timestamp())
-    assert _run(capsys, "--cache", str(cache), "check", "--tier", "ui", "--at", f"@{sat}")[0] == 0
-    assert _run(capsys, "--cache", str(cache), "check", "--tier", "ui", "--at", "2025-11-26T15:00:00Z")[0] == 1
+    assert _run(capsys, "--cache", str(cache), "check", "--tier", "infra", "--at", f"@{sat}")[0] == 0
+    assert _run(capsys, "--cache", str(cache), "check", "--tier", "infra", "--at", "2025-11-26T15:00:00Z")[0] == 1
 
 
 def test_status(capsys: pytest.CaptureFixture[str], cache: Path, tmp_path: Path) -> None:
