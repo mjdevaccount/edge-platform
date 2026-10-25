@@ -6,10 +6,10 @@ in ONE versioned place instead of hand copies kept equal by comments.
 | tenant | what | status |
 |---|---|---|
 | `edge_platform.notify` | the ntfy.sh push budget: the policy file, its reader, the declared sender registry, the Alertmanager night-window check | v0.3.2: every home-IP sender gated, counted or exempt (0 uncounted) |
-| `edge_platform.fence` | the trading-hours deploy fence: "is a change to this tier allowed now, and until when?" (plans `deploy-fence-replacement` §6) | v0.3.1, no caller yet |
+| `edge_platform.fence` | the trading-hours deploy fence: "is a change to this tier allowed now, and until when?" (plans `deploy-fence-replacement` §6) | v0.3.3: callers edge-host `scripts/edge-fence` (box, pin `edge-platform.pin`) and mcp `observer-reconcile.py` (wheel); textfile samples exact |
 
 ```
-pip install "edge-platform @ https://github.com/mjdevaccount/edge-platform/releases/download/v0.3.2/edge_platform-0.3.2-py3-none-any.whl"
+pip install "edge-platform @ https://github.com/mjdevaccount/edge-platform/releases/download/v0.3.3/edge_platform-0.3.3-py3-none-any.whl"
 pip install "edge-platform[db] @ ..."   # the edge box: also reads quant.market_sessions (psycopg)
 ```
 

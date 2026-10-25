@@ -77,6 +77,12 @@ def _p(argv: list[str] | None) -> argparse.Namespace:
 _LINE = re.compile(r"^(edge_fence_\w+)\{(.*)\} (\S+)$")
 
 
+def _num(v: float) -> str:
+    """Exact sample text. `:g` keeps six significant digits, so an epoch timestamp printed as
+    1.7929e+09 -- up to ~80 min off, which a staleness rule would read as truth (v0.3.3)."""
+    return str(int(v)) if v.is_integer() else repr(v)
+
+
 def bump_textfile(path: Path, tier: str, result: str, source: str, now: float) -> None:
     """Read-modify-write the counter file atomically. A torn or foreign file restarts at zero
     (Prometheus reads a counter reset as a reset, not as a loss of the fence's decision)."""
@@ -97,7 +103,7 @@ def bump_textfile(path: Path, tier: str, result: str, source: str, now: float) -
         "# HELP edge_fence_last_decision_timestamp_seconds When the fence last decided for a tier.",
         "# TYPE edge_fence_last_decision_timestamp_seconds gauge",
     ]
-    out += [f"{n}{{{lab}}} {v:g}" for (n, lab), v in sorted(vals.items())]
+    out += [f"{n}{{{lab}}} {_num(v)}" for (n, lab), v in sorted(vals.items())]
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".edge_fence.", suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:

@@ -103,3 +103,19 @@ def test_no_tzdata_is_exit_2_with_a_record(
     assert rc == 2 and rec["allowed"] is False and rec["source"] == "none" and "tzdata" in rec["reason"]
     rc, rec = _run(capsys, "--cache", str(cache), "status")
     assert rc == 2 and rec["tz_ok"] is False
+
+
+def test_textfile_samples_are_exact(tmp_path: Path) -> None:
+    from edge_platform.fence.cli import bump_textfile
+
+    tf = tmp_path / "edge_fence.prom"
+
+    bump_textfile(tf, "service", "allow", "cache", 1792895200.25)
+    prom = tf.read_text(encoding="utf-8")
+    assert 'edge_fence_last_decision_timestamp_seconds{tier="service"} 1792895200.25' in prom
+    assert 'edge_fence_decisions_total{tier="service",result="allow",source="cache"} 1' in prom
+    tf.write_text('edge_fence_decisions_total{tier="service",result="allow",source="cache"} 1234567' + chr(10))
+    bump_textfile(tf, "service", "allow", "cache", 1792895201.0)
+    prom = tf.read_text(encoding="utf-8")
+    assert 'result="allow",source="cache"} 1234568' in prom
+    assert 'edge_fence_last_decision_timestamp_seconds{tier="service"} 1792895201' in prom
