@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "about": "The trading-hours deploy fence (plans deploy-fence-replacement section 6). A fenced tier may change only outside every [open - pad_before, close + pad_after) window of an XNYS session and outside its blackouts, with at least `need` minutes left before the next window. Holidays and half-day afternoons are open (operator call 1, approved 2026-10-24). A policy change is a version bump with a PR.",
+  "defaults": {
+    "pad_before_min": 15,
+    "pad_after_min": 35,
+    "need_min": 0
+  },
+  "superset": {
+    "about": "No session table at all (db, cache and bundled all blind): Mon-Fri, holiday-unaware. It contains every real window, so blindness can only refuse more, never ship into a session.",
+    "weekdays": [1, 2, 3, 4, 5],
+    "start_et": "09:15",
+    "end_et": "16:35"
+  },
+  "tiers": {
+    "service": {"fenced": true},
+    "quant": {"fenced": true},
+    "ui": {"fenced": true},
+    "infra": {"fenced": true},
+    "windmill": {"fenced": true},
+    "observer": {"fenced": true, "why": "mcp observer-reconcile.py in_rth fences it today: a restart blinds the outside watcher mid-session"},
+    "pve": {"fenced": true, "why": "the observer VM's parent; anything that restarts it blinds the observer"},
+    "llmbox": {"fenced": true, "why": "the copilot reads it during the session; its daily 04:00 stack-pull is outside every window anyway"}
+  },
+  "blackouts": []
+}

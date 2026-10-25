@@ -28,10 +28,10 @@ jobs:
       - run: uv sync --frozen
       - run: uv run pytest -q
       - run: uv build
-      - name: notify assets + SHA256SUMS
+      - name: notify + fence assets + SHA256SUMS
         run: |
           cp edge_platform/notify/ntfy-policy.json edge_platform/notify/ntfy-policy.cases.json \
-             edge_platform/notify/ntfy-publishers.json dist/
+             edge_platform/notify/ntfy-publishers.json edge_platform/fence/fence-policy.json dist/
           (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
       - name: publish release
         env:

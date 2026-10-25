@@ -6,11 +6,45 @@ in ONE versioned place instead of hand copies kept equal by comments.
 | tenant | what | status |
 |---|---|---|
 | `edge_platform.notify` | the ntfy.sh push budget: the policy file, its reader, the declared sender registry, the Alertmanager night-window check | v0.2.0 |
-| `edge_platform.fence` | the trading-hours deploy fence (plans `deploy-fence-replacement`) | reserved |
+| `edge_platform.fence` | the trading-hours deploy fence: "is a change to this tier allowed now, and until when?" (plans `deploy-fence-replacement` §6) | v0.3.0, no caller yet |
 
 ```
-pip install "edge-platform @ https://github.com/mjdevaccount/edge-platform/releases/download/v0.2.0/edge_platform-0.2.0-py3-none-any.whl"
+pip install "edge-platform @ https://github.com/mjdevaccount/edge-platform/releases/download/v0.3.0/edge_platform-0.3.0-py3-none-any.whl"
+pip install "edge-platform[db] @ ..."   # the edge box: also reads quant.market_sessions (psycopg)
 ```
+
+## fence
+
+One implementation of the deploy fence for every box and delivery path. It replaces hand twins
+that each compute the same window: edge-host `rth-guard.sh` / `lib-clock.sh` / `lib_clock.py` /
+`jobs_gate.py fence-minutes`, trade-infra `deploy-bluegreen.sh rth_fence_active`, mcp
+`RthFence.cs` and `observer-reconcile.py in_rth`. Swapping each caller is plans §9 step 1.
+
+| file | says |
+|---|---|
+| `fence-policy.json` | per tier: fenced or not, pads before the open / after the close (15 / 35 min), blackouts, and the blind superset (Mon-Fri 09:15-16:35 ET). Holidays and half-day afternoons are OPEN (operator call 1, 2026-10-24) |
+| `sessions-bundled.json` | XNYS sessions ~2 years ahead from exchange_calendars (`scripts/gen_bundled_sessions.py`); CI fails when < 180 days remain |
+
+The session table comes from the first source that answers: `quant.market_sessions` (`--dsn` /
+`$EDGE_FENCE_DSN`, select-only; a good read refreshes the cache) -> the schema-1 cache file
+(`--cache` / `$CLOCK_SESSIONS_FILE`, default `/var/lib/edge-clock/sessions.json`, trusted 336h)
+-> the bundled table -> the weekday superset. Blind never ships into a session (the superset
+contains every real window) and never deadlocks. No tzdata = exit 2: nothing ET-based can be
+decided.
+
+```
+edge-fence check --tier service --need 45m      # one JSON decision line; exit 0 allow / 1 refuse / 2 cannot evaluate
+edge-fence status                               # which source answers, its horizon
+edge-fence --textfile /var/lib/node_exporter/textfile/edge_fence.prom check --tier ui
+```
+
+A refusal is a deferral: record it and try the next slot. Exit 2 is a refusal to every caller.
+`--override "<reason>"` allows and says so in the record (`source: override`). The record
+carries `until` (allowed: when the next window starts), `next_open_window` (refused: the
+earliest allowed instant with `--need` free), `source`, `horizon`, `policy_sha256`,
+`decision_id`. `--textfile` keeps `edge_fence_decisions_total{tier,result,source}` and
+`edge_fence_last_decision_timestamp_seconds{tier}` for node_exporter; the rules that read them
+(`FenceRunningBlind`, `FenceOverrideUsed`) belong to the alert owners and are not written yet.
 
 ## notify
 

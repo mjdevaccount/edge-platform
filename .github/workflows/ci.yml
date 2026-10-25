@@ -31,6 +31,8 @@ jobs:
           uv build
           uvx --from dist/edge_platform-*.whl edge-notify check-pin
           uvx --from dist/edge_platform-*.whl edge-notify senders
+          uvx --from dist/edge_platform-*.whl edge-fence status
+          uvx --from dist/edge_platform-*.whl edge-fence check --tier service --at 2025-11-29T12:00
 
   gitleaks:
     name: gitleaks (secret scan)
