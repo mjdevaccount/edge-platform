@@ -5,11 +5,11 @@ in ONE versioned place instead of hand copies kept equal by comments.
 
 | tenant | what | status |
 |---|---|---|
-| `edge_platform.notify` | the ntfy.sh push budget: the policy file, its reader, the declared sender registry, the Alertmanager night-window check | v0.1.0 |
+| `edge_platform.notify` | the ntfy.sh push budget: the policy file, its reader, the declared sender registry, the Alertmanager night-window check | v0.2.0 |
 | `edge_platform.fence` | the trading-hours deploy fence (plans `deploy-fence-replacement`) | reserved |
 
 ```
-pip install "edge-platform @ https://github.com/mjdevaccount/edge-platform/releases/download/v0.1.0/edge_platform-0.1.0-py3-none-any.whl"
+pip install "edge-platform @ https://github.com/mjdevaccount/edge-platform/releases/download/v0.2.0/edge_platform-0.2.0-py3-none-any.whl"
 ```
 
 ## notify

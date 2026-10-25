@@ -80,7 +80,7 @@
       "mode": "counted",
       "publishers": ["alertmanager"],
       "counted_by": "edge-host scripts/am-heartbeat-watch.sh am_ledger_sync: webhook notifications_total - failed_total, appended to the ledger as publisher alertmanager",
-      "why": "Alertmanager POSTs to ntfy.sh by webhook and reads no policy. Its night mute is a hand copy of policy.night; `edge-notify am-night` (this package) is the check, and pinning it in trade-infra CI is OWED (round 6 gap 3, lands after this release)."
+      "why": "Alertmanager POSTs to ntfy.sh by webhook and reads no policy. Its night mute is a hand copy of policy.night; `edge-notify am-night` (this package) is the check, and trade-infra CI runs it on every PR (ci.yml python job, trade-infra#716), with must-fire copies (an hour-late window, an unmuted p2 route) that must go red."
     },
     {
       "name": "observer-alertmanager",
@@ -98,7 +98,7 @@
       "route": "direct",
       "mode": "uncounted",
       "publishers": [],
-      "owed": "contact points ntfy-wake (NTFY_TOPIC_P1) and ntfy-heads-up (NTFY_TOPIC) are webhooks to $NTFY_BASE_URL, compose default https://ntfy.sh (docker-compose.yml grafana env), from edge-host = the home IP. No policy read, no ledger line: they land in edge_ntfy_sent_unattributed. Close = count them (Grafana's notification metrics -> ledger, like am_ledger_sync) or route them through Alertmanager.",
+      "owed": "contact points ntfy-wake (NTFY_TOPIC_P1) and ntfy-heads-up (NTFY_TOPIC) are webhooks to $NTFY_BASE_URL = https://ntfy.sh (measured 2026-10-25, printenv in trade-data-grafana), from edge-host = the home IP; the notification policy routes page=heads-up (4 rules), page=wake and area=llm-box (1 rule) there. No policy read, no ledger line: they land in edge_ntfy_sent_unattributed. NOT countable from Grafana's metrics: grafana_alerting_notifications_total is labelled by integration only, and integration=webhook also carries the healthchecks-deadman ping every 4m (2144 sent / 3 failed, 2026-10-25). Close = route these rules through Alertmanager (already ledgered), or count Grafana's per-receiver 'Notify success' log lines the way the Gatus counter does.",
       "why": "Grafana-native alert rules (page=heads-up, box-down) deliver through Grafana's own contact points."
     },
     {
@@ -106,20 +106,20 @@
       "repo": "trade-infra",
       "where": ["scripts/deploy-bluegreen.sh"],
       "route": "direct",
-      "mode": "uncounted",
-      "publishers": [],
-      "owed": "ntfy_push() is a raw curl to NTFY_BASE_URL (default https://ntfy.sh) on the box: emergency RTH deploy, auth refused, canary failures and a scorecard on EVERY deploy. No policy, no ledger. Close = source edge-host lib-notify.sh (gated) like every other box script.",
-      "why": "the blue/green deploy script reports its own outcome to the phone."
+      "mode": "counted",
+      "publishers": ["deploy-bluegreen"],
+      "counted_by": "ntfy_push() appends one line to edge-host's send ledger ($EDGE_NOTIFY_STATE/sent/<UTC day>/deploy-bluegreen) after public ntfy.sh ACCEPTED the post (curl -f; a self-hosted base url is not ledgered); am-heartbeat-watch exports it as edge_ntfy_sent_today{publisher=\"deploy-bluegreen\"}. Pinned both ways by trade-infra tests/deploy-bluegreen.bats ('notify: ... ledger').",
+      "why": "the blue/green deploy script reports its own outcome to the phone (emergency RTH deploy, auth refused, canary failures, a scorecard every deploy). Counted, not gated: it cannot source edge-host's library (trade-infra is pulled independently; bats copies the file alone), and a deploy page is rare."
     },
     {
       "name": "gatus",
       "repo": "home-host",
-      "where": ["observer/gatus/config.yaml"],
+      "where": ["observer/gatus/config.yaml", "observer/gatus_ntfysh_count.py"],
       "route": "gatus",
-      "mode": "uncounted",
-      "publishers": [],
-      "owed": "the `self` group and the duplicate public `edge-host ping` alert post to PUBLIC ntfy.sh from the observer VM, whose egress IS the home IP (measured 2026-10-24). They land in edge_ntfy_sent_unattributed. Closing this = count them (mode counted) -- round 6 gap 4.",
-      "why": "the off-box observer must page when edge-host itself is down, so it cannot depend on edge-host's library."
+      "mode": "counted",
+      "publishers": ["gatus"],
+      "counted_by": "home-host observer/gatus_ntfysh_count.py counts Gatus's send lines for every alert resolving to ntfy.sh (the `self` group + the duplicate public `edge-host ping` page) into the observer's node-exporter; edge-host scripts/am-heartbeat-watch.sh gatus_ledger_sync appends the delta to the ledger as publisher gatus, net of the sends Gatus logged as failed (observer_gatus_ntfysh_failed_total, home-host#95 + edge-host#511). The counter is watched by GatusNtfyshCountBlind (home-host observer/prometheus/pager-alerts.yml); the edge-host read by edge_ntfy_gatus_counter_ok.",
+      "why": "the off-box observer must page when edge-host itself is down, so it cannot depend on edge-host's library: counted after the fact, never gated. Its egress IS the home IP (measured 2026-10-24)."
     },
     {
       "name": "ci-github-hosted",

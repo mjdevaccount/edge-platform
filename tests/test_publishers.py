@@ -37,15 +37,14 @@ def test_today_the_uncounted_senders_are_exactly_these():
     # edit -- on purpose: shrinking this list is the work, and growing it must be a reviewed diff.
     assert [s.name for s in pubs.uncounted(pubs.load())] == [
         "grafana-contact-points",
-        "trade-infra-deploy-bluegreen",
-        "gatus",
     ]
 
 
 @pytest.mark.parametrize(
     ("name", "key", "value", "match"),
     [
-        ("gatus", "owed", None, "owed"),  # a known hole must say what closes it
+        ("grafana-contact-points", "owed", None, "owed"),  # a known hole must say what closes it
+        ("gatus", "counted_by", None, "counted_by"),  # the gap closed by counting must say where
         ("alertmanager", "counted_by", None, "counted_by"),  # counted must say by what
         ("edge-host-lib-notify", "owed", "something", "owed"),  # a closed gap carries no debt
         ("edge-host-lib-notify", "route", "carrier-pigeon", "route"),
