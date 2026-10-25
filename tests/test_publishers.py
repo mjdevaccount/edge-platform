@@ -35,15 +35,12 @@ def test_an_exemption_with_no_declaring_sender_fires():
 def test_today_the_uncounted_senders_are_exactly_these():
     # Each is a known hole with its `owed`. When one is counted this test moves WITH the registry
     # edit -- on purpose: shrinking this list is the work, and growing it must be a reviewed diff.
-    assert [s.name for s in pubs.uncounted(pubs.load())] == [
-        "grafana-contact-points",
-    ]
+    assert [s.name for s in pubs.uncounted(pubs.load())] == []
 
 
 @pytest.mark.parametrize(
     ("name", "key", "value", "match"),
     [
-        ("grafana-contact-points", "owed", None, "owed"),  # a known hole must say what closes it
         ("gatus", "counted_by", None, "counted_by"),  # the gap closed by counting must say where
         ("alertmanager", "counted_by", None, "counted_by"),  # counted must say by what
         ("edge-host-lib-notify", "owed", "something", "owed"),  # a closed gap carries no debt
@@ -74,4 +71,14 @@ def test_a_duplicate_sender_or_publisher_is_refused():
     edited = copy.deepcopy(RAW)
     _sender(edited, "alertmanager")["publishers"] = ["alertmanager", "trade-data"]
     with pytest.raises(ValueError, match="already declared"):
+        pubs.parse(edited)
+
+
+def test_an_uncounted_sender_without_owed_is_refused():
+    # No sender is uncounted today, so build one: a known hole must say what closes it.
+    edited = copy.deepcopy(RAW)
+    entry = _sender(edited, "grafana-contact-points")
+    entry["mode"] = "uncounted"
+    del entry["counted_by"]
+    with pytest.raises(ValueError, match="owed"):
         pubs.parse(edited)
