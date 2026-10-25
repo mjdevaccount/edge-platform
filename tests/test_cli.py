@@ -58,7 +58,7 @@ def test_unreadable_or_invalid_input_is_blind_exit_2(capsys, tmp_path, argv):
 
 def test_senders_lists_the_registry_and_names_the_uncounted(capsys):
     rc, out = _run(capsys, "senders")
-    assert rc == 0 and "2 uncounted: grafana-contact-points, trade-infra-deploy-bluegreen" in out
+    assert rc == 0 and "1 uncounted: grafana-contact-points" in out
 
 
 def test_a_usage_error_is_blind_and_help_is_clean(capsys):

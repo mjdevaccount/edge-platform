@@ -37,7 +37,6 @@ def test_today_the_uncounted_senders_are_exactly_these():
     # edit -- on purpose: shrinking this list is the work, and growing it must be a reviewed diff.
     assert [s.name for s in pubs.uncounted(pubs.load())] == [
         "grafana-contact-points",
-        "trade-infra-deploy-bluegreen",
     ]
 
 
