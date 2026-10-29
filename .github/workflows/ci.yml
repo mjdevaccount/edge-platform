@@ -26,6 +26,12 @@ jobs:
           uv run ruff format --check .
       - name: tests
         run: uv run pytest -q
+      - name: the .env twins against docker compose itself (tests/env/lib-env.test.sh)
+        # The oracle: both twins over one fixture, LF and CRLF, against answers compose produced, and
+        # compose RE-ASKED here (ubuntu-latest has it; CI=true makes a missing compose exit 2, never a
+        # skip). This is the one place it runs: consumers prove their vendored copies equal to the
+        # release with `edge-env check-copy` instead of each re-running it.
+        run: bash tests/env/lib-env.test.sh
       - name: the built wheel carries its data files and its CLI works
         run: |
           uv build
@@ -33,6 +39,8 @@ jobs:
           uvx --from dist/edge_platform-*.whl edge-notify senders
           uvx --from dist/edge_platform-*.whl edge-fence status
           uvx --from dist/edge_platform-*.whl edge-fence check --tier service --at 2025-11-29T12:00
+          uvx --from dist/edge_platform-*.whl edge-env check-copy edge_platform/env/lib-env.sh edge_platform/env/lib_env.py
+          sh=$(uvx --from dist/edge_platform-*.whl edge-env path sh) && bash -n "$sh"
 
   gitleaks:
     name: gitleaks (secret scan)

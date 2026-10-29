@@ -1,7 +1,7 @@
 [project]
 name = "edge-platform"
-version = "0.3.4"
-description = "EDGE's shared platform package: the ntfy.sh push budget (notify) and the trading-hours deploy fence (fence)."
+version = "0.4.0"
+description = "EDGE's shared platform package: the ntfy.sh push budget (notify), the trading-hours deploy fence (fence) and the compose-rules .env reader (env)."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -13,6 +13,7 @@ dependencies = [
 [project.scripts]
 edge-notify = "edge_platform.notify.cli:main"
 edge-fence = "edge_platform.fence.cli:main"
+edge-env = "edge_platform.env.cli:main"
 
 [project.optional-dependencies]
 db = [
