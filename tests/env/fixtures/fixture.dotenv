@@ -1,0 +1,45 @@
+# lib-env fixture -- every value here is FAKE. tests/lib-env.test.sh reads each key with
+# lib-env.sh, lib_env.py and (where installed) docker compose, and compares all three to
+# expected.json, which `bash tests/lib-env.test.sh --regen` wrote FROM docker compose.
+# The test also derives a CRLF copy of this whole file (the repo refuses a committed CRLF),
+# and gives FX_TRAILING_WS its three trailing spaces back (whitespace hygiene strips them).
+# It runs with FX_OS_SET=from-os and FX_INHERIT=inherited in the process environment.
+
+FX_PLAIN=plain
+FX_HASH_NOSPACE=abc#def
+FX_HASH_SPACE=abc #a comment
+FX_HASH_TAB=abc	#tab-is-not-a-comment-start
+FX_URL=https://x.example/a?b=1#frag
+FX_EQ=a=b=c
+FX_TRAILING_WS=val
+  FX_INDENT=indented
+FX_SPACES  =  spaced
+FX_COLON: yaml-form
+export FX_EXPORT=exported
+FX_EMPTY=
+FX_EMPTY_DQ=""
+FX_QUOTE_MID=ab"cd
+FX_DQ="double quoted # not a comment"
+FX_DQ_TRAIL="x" # trailing comment
+FX_SQ='single $FX_PLAIN not expanded'
+FX_SQ_ESC='it\'s'
+FX_DQ_ESC="tab\there \"q\" back\\slash \$FX_PLAIN"
+FX_DQ_NL="line1\nline2"
+FX_MULTI="first
+second"
+FX_DUP=first
+FX_DUP=second
+FX_DOLLAR=$$2a$$10$$abcdef
+FX_REF=${FX_PLAIN}/x
+FX_REF_BARE=$FX_PLAIN-y
+FX_REF_UNSET=pre${FX_NOT_SET}post
+FX_DEFAULT=${FX_NOT_SET:-fallback}
+FX_DEFAULT_EMPTY=${FX_EMPTY:-was-empty}
+FX_DASH_EMPTY=${FX_EMPTY-kept-empty}
+FX_PLUS=${FX_PLAIN:+set}
+FX_FROM_OS=${FX_OS_SET}
+FX_DQ_REF="${FX_PLAIN} and $$"
+FX_LONE_DOLLAR=cost $5
+# FX_COMMENTED=never
+FX_INHERIT
+FX_LAST=end

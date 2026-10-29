@@ -8,10 +8,36 @@ in ONE versioned place instead of hand copies kept equal by comments.
 | `edge_platform.notify` | the ntfy.sh push budget: the policy file, its reader, the declared sender registry, the Alertmanager night-window check | v0.3.2: every home-IP sender gated, counted or exempt (0 uncounted) |
 | `edge_platform.fence` | the trading-hours deploy fence: "is a change to this tier allowed now, and until when?" (plans `deploy-fence-replacement` §6) | v0.3.4: callers edge-host `scripts/edge-fence` (box, pin `edge-platform.pin`) and mcp `observer-reconcile.py` (wheel); textfile samples exact and world-readable (node_exporter runs as another user) |
 
+| `edge_platform.env` | the `.env` reader with docker compose's rules: `lib_env.py` and its bash twin `lib-env.sh` | v0.4.0: moved here from edge-host `scripts/`; trade-infra / home-host python imports the wheel, every bash / box-python copy is vendored and proven with `edge-env check-copy` |
+
 ```
-pip install "edge-platform @ https://github.com/mjdevaccount/edge-platform/releases/download/v0.3.4/edge_platform-0.3.4-py3-none-any.whl"
+pip install "edge-platform @ https://github.com/mjdevaccount/edge-platform/releases/download/v0.4.0/edge_platform-0.4.0-py3-none-any.whl"
 pip install "edge-platform[db] @ ..."   # the edge box: also reads quant.market_sessions (psycopg)
 ```
+
+## env
+
+One reader for every `.env` in the estate, with compose-go v2.16.2's rules (last duplicate wins,
+`a#b` keeps its `#`, `$$` is one `$`, quotes, interpolation from the process env first) and
+refusals instead of guesses (exit 2 / `EnvBlind`, the message names a line, never a value).
+`tests/env/lib-env.test.sh` holds both twins to answers docker compose itself produced and
+re-asks compose in CI.
+
+```
+from edge_platform.env import lib_env          # python that can install the wheel
+lib_env.get("WINDMILL_TOKEN", "/path/.env")    # str | None; raises lib_env.EnvBlind
+
+edge-env get KEY [FILE]                        # exit 0 assigned / 1 not assigned / 2 BLIND
+edge-env digest FILE KEY...                    # sha256[:12] per key, for comparing readers
+edge-env check-copy scripts/lib-env.sh scripts/lib_env.py   # a vendored copy == THIS release
+```
+
+Bash sources a file, and the box's system python and the observer VM's Debian python3 have no
+pip, so those consumers keep a VENDORED copy beside their scripts (edge-host `scripts/`,
+trade-infra `scripts/lib-env.sh`, home-host `observer/lib-env.sh`). Each proves it in CI with
+`uvx --from <its pinned wheel URL> edge-env check-copy <copies>` -- exact bytes, CRLF is a
+finding -- and ci-kit's `ci-pin-drift` holds that wheel pin to the newest release. Edit the twins
+HERE, release, then re-vendor.
 
 ## fence
 
