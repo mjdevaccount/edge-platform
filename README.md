@@ -9,10 +9,12 @@ in ONE versioned place instead of hand copies kept equal by comments.
 | `edge_platform.fence` | the trading-hours deploy fence: "is a change to this tier allowed now, and until when?" (plans `deploy-fence-replacement` §6) | v0.3.4: callers edge-host `scripts/edge-fence` (box, pin `edge-platform.pin`) and mcp `observer-reconcile.py` (wheel); textfile samples exact and world-readable (node_exporter runs as another user) |
 
 | `edge_platform.env` | the `.env` reader with docker compose's rules: `lib_env.py` and its bash twin `lib-env.sh` | v0.4.0: moved here from edge-host `scripts/`; trade-infra / home-host python imports the wheel, every bash / box-python copy is vendored and proven with `edge-env check-copy` |
+| `edge_platform.service` | the composition root EDGE's FastAPI services share (extra `[service]`): `Database` (lazy engine + session maker + dispose), `build_lifespan` (single-worker assert, warm imports, GUARDED teardown: a raising hook logs `shutdown_hook_failed` and `dispose` still runs), `ServiceSettings`, `AdminRunTimeline` + `remote_timeline` (`/admin/run/*` -> one work-timeline unit; logs `work timeline DISABLED` once when inert) | v0.5.0: consumers trade-data and trade-quant (inventory row S4) |
 
 ```
-pip install "edge-platform @ https://github.com/mjdevaccount/edge-platform/releases/download/v0.4.0/edge_platform-0.4.0-py3-none-any.whl"
+pip install "edge-platform @ https://github.com/mjdevaccount/edge-platform/releases/download/v0.5.0/edge_platform-0.5.0-py3-none-any.whl"
 pip install "edge-platform[db] @ ..."   # the edge box: also reads quant.market_sessions (psycopg)
+pip install "edge-platform[service] @ ..."   # a FastAPI service: fastapi, sqlalchemy[asyncio], pydantic-settings, structlog
 ```
 
 ## env

@@ -1,7 +1,7 @@
 [project]
 name = "edge-platform"
-version = "0.4.0"
-description = "EDGE's shared platform package: the ntfy.sh push budget (notify), the trading-hours deploy fence (fence) and the compose-rules .env reader (env)."
+version = "0.5.0"
+description = "EDGE's shared platform package: the ntfy.sh push budget (notify), the trading-hours deploy fence (fence), the compose-rules .env reader (env) and the FastAPI service composition root (service)."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -19,6 +19,14 @@ edge-env = "edge_platform.env.cli:main"
 db = [
     "psycopg[binary]>=3.2",
 ]
+# edge_platform.service: the composition root trade-data and trade-quant share (db core, lifespan,
+# settings base, /admin/run/* timeline middleware). Importing edge_platform alone never needs these.
+service = [
+    "fastapi>=0.115",
+    "pydantic-settings>=2.7",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "structlog>=24.4",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -29,7 +37,10 @@ packages = ["edge_platform"]
 
 [dependency-groups]
 dev = [
+    "aiosqlite>=0.21",
+    "edge-platform[service]",
     "exchange-calendars>=4.13.2",
+    "httpx>=0.28",
     "pytest>=8.3",
     "ruff>=0.15",
 ]
