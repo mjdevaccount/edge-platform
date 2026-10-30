@@ -41,6 +41,9 @@ jobs:
           uvx --from dist/edge_platform-*.whl edge-fence check --tier service --at 2025-11-29T12:00
           uvx --from dist/edge_platform-*.whl edge-env check-copy edge_platform/env/lib-env.sh edge_platform/env/lib_env.py
           sh=$(uvx --from dist/edge_platform-*.whl edge-env path sh) && bash -n "$sh"
+          # the [service] extra resolves from the wheel's own metadata and every tenant module imports
+          whl=$(ls dist/edge_platform-*.whl)
+          uv run --isolated --no-project --with "${whl}[service]" python -c "import edge_platform.service.db, edge_platform.service.lifespan, edge_platform.service.settings, edge_platform.service.timeline"
 
   gitleaks:
     name: gitleaks (secret scan)
