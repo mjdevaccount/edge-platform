@@ -53,3 +53,11 @@ jobs:
     uses: mjdevaccount/ci-kit/.github/workflows/gitleaks.yml@v1
     with:
       mode: history
+
+  # The same code written twice fails the PR: ci-kit's `ci-dup-code` (jscpd 5.4.2 behind a
+  # shrink-only fingerprint baseline, ci/jscpd-baseline.json -- 0 clone(s) frozen 2026-10-31, the
+  # backlog of "written again"). A NEW clone >= 70 tokens / 7 lines between two tracked files
+  # fails; a removed one may re-freeze smaller (`--write-baseline` refuses to grow). Reports as
+  # "dup-code / lint".
+  dup-code:
+    uses: mjdevaccount/ci-kit/.github/workflows/dup-code.yml@v1
