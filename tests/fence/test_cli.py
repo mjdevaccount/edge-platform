@@ -53,12 +53,16 @@ def test_exit_codes_and_record(capsys: pytest.CaptureFixture[str], cache: Path, 
     assert 'tier="nope",result="blind"' not in prom
 
 
-def test_a_malformed_policy_is_blind_not_invalid(capsys: pytest.CaptureFixture[str], cache: Path, tmp_path: Path) -> None:
+def test_a_malformed_policy_is_blind_not_invalid(
+    capsys: pytest.CaptureFixture[str], cache: Path, tmp_path: Path
+) -> None:
     """UnknownTier subclasses PolicyError; the parent (an unusable policy file) must stay `blind`."""
     tf = tmp_path / "edge_fence.prom"
     bad = tmp_path / "policy.json"
     bad.write_text("{}", encoding="utf-8")
-    rc, rec = _run(capsys, "--cache", str(cache), "--textfile", str(tf), "--policy", str(bad), "check", "--tier", "service")
+    rc, rec = _run(
+        capsys, "--cache", str(cache), "--textfile", str(tf), "--policy", str(bad), "check", "--tier", "service"
+    )
     assert rc == 2 and rec["source"] == "none"
     assert 'edge_fence_decisions_total{tier="service",result="blind",source="none"} 1' in tf.read_text(encoding="utf-8")
 
