@@ -104,9 +104,17 @@ def test_a_keyless_step_needs_no_key_variable_and_posts_unauthenticated(step, va
 
 
 def test_a_keyless_step_never_reads_a_key_variable_it_was_given(step, capsys) -> None:
-    step.variables[KEYVAR] = RuntimeError("must not be read")  # require_key would raise on a read
-    _run(step, send_key=False, require_key=True)
+    step.variables[KEYVAR] = RuntimeError("must not be read")  # a read would print the fail-open line
+    _run(step, send_key=False)
     assert step.sent["headers"] is None and capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("key_variable", [KEYVAR, None])
+def test_require_key_with_send_key_false_is_a_config_error_and_sends_nothing(step, key_variable) -> None:
+    """Fail closed on a key it will never send: refused before any request, not a silent keyless post."""
+    with pytest.raises(ValueError, match="require_key is set but send_key is false"):
+        step.main(URL, key_variable, "probe", send_key=False, require_key=True)
+    assert step.sent == {}
 
 
 @pytest.mark.parametrize("send_key", [True, None])

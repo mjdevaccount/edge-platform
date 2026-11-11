@@ -22,8 +22,9 @@ passes null for every input a step does not list, so "required" is enforced HERE
 only in the schema: a missing or blank `service_url` raises before any request is sent, and so does
 a blank `key_variable` unless the step says `send_key: false`. A `send_key: false` step names a
 service that verifies no key, so it has no key to name (v0.10.1: v0.10.0 demanded one anyway and
-would have failed every keyless flow sharing the script, e.g. trade-quant's in trade-data's
-workspace); any `key_variable` it passes is ignored, never read.
+would have failed a keyless consumer's flows sharing this script); any `key_variable` it passes is
+ignored, never read. `send_key: false` with `require_key: true` asks to fail closed on a key it
+will never send: a config error, refused before any request.
 
 WHAT IT KEEPS, on purpose:
 
@@ -109,6 +110,11 @@ def main(
     # `is not False` / `is True`, never truthiness: an unlisted input's null keeps the safe default.
     send_key = send_key is not False
     require_key = require_key is True
+    if require_key and not send_key:
+        raise ValueError(
+            "post_admin_run: require_key is set but send_key is false -- a step cannot fail "
+            "closed on a key it never sends; drop one of the two"
+        )
     # The key's variable is required exactly when a key is sent; a keyless step never reads one.
     key_variable = _required("key_variable", key_variable) if send_key else None
     kind = _required("kind", kind)
