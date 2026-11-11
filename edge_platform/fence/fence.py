@@ -30,6 +30,16 @@ class PolicyError(ValueError):
     """The policy file is unusable: exit 2, never a default."""
 
 
+class UnknownTier(PolicyError):
+    """The CALLER named a tier the policy does not have: still exit 2 (a refusal to every caller),
+    but the fence's inputs are fine, so it is counted `result="invalid"`, never `blind`.
+
+    2026-11-11 02:00Z: a hand probe `edge-fence check --tier caddy` counted
+    `result="blind"` and fired trade-infra's EdgeFenceBlind for an hour while every source the
+    fence reads was healthy. Blind means the fence cannot see its input; a typo is not that.
+    """
+
+
 @dataclass(frozen=True)
 class Tier:
     name: str
@@ -166,10 +176,10 @@ def decide(
     policy: Policy | None = None,
     override: str | None = None,
 ) -> Decision:
-    """Raises PolicyError (unknown tier, bad policy) and ClockBlind (no tzdata): both are exit 2."""
+    """Raises UnknownTier (a PolicyError), PolicyError (bad policy) and ClockBlind (no tzdata): all exit 2."""
     pol = policy or load_policy()
     if tier not in pol.tiers:
-        raise PolicyError(f"unknown tier {tier!r} (policy has {', '.join(sorted(pol.tiers))})")
+        raise UnknownTier(f"unknown tier {tier!r} (policy has {', '.join(sorted(pol.tiers))})")
     if at.tzinfo is None:
         raise ValueError("the fence needs a tz-aware instant")
     if not tz_ok():

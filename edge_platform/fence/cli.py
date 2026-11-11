@@ -14,6 +14,8 @@ trusted up to $CLOCK_MAX_AGE_H, 336h) -> the bundled snapshot -> the weekday sup
 
 Telemetry: --textfile PATH (or $EDGE_FENCE_TEXTFILE) keeps node_exporter textfile counters
 edge_fence_decisions_total{tier,result,source} and edge_fence_last_decision_timestamp_seconds{tier}.
+result is allow | refuse | blind (the fence could not evaluate: a source, the instant, tzdata) |
+invalid (the caller named a tier the policy does not have -- still exit 2, but not blindness).
 A counter that cannot be written never changes the verdict: it warns on stderr, and the stale
 timestamp is what an outside rule sees. Any crash is exit 2 with a record, never rc 1 or 0.
 --need defaults to the tier's need_min in the policy.
@@ -98,7 +100,7 @@ def bump_textfile(path: Path, tier: str, result: str, source: str, now: float) -
     vals[k] = vals.get(k, 0.0) + 1
     vals[("edge_fence_last_decision_timestamp_seconds", f'tier="{tier}"')] = now
     out = [
-        "# HELP edge_fence_decisions_total Fence decisions by tier, result (allow|refuse|blind) and source.",
+        "# HELP edge_fence_decisions_total Fence decisions by tier, result (allow|refuse|blind|invalid) and source.",
         "# TYPE edge_fence_decisions_total counter",
         "# HELP edge_fence_last_decision_timestamp_seconds When the fence last decided for a tier.",
         "# TYPE edge_fence_last_decision_timestamp_seconds gauge",
@@ -123,10 +125,10 @@ def _count(textfile: Path | None, tier: str, result: str, source: str) -> None:
         print(f"edge-fence: WARNING -- counter not written to {textfile} ({e}); the verdict stands", file=sys.stderr)
 
 
-def _blind(textfile: Path | None, tier: str, why: str) -> int:
+def _blind(textfile: Path | None, tier: str, why: str, result: str = "blind") -> int:
     rec = {"allowed": False, "tier": tier, "reason": f"could not evaluate: {why}", "source": "none"}
     print(json.dumps(rec, separators=(",", ":"), sort_keys=True))
-    _count(textfile, tier, "blind", "none")
+    _count(textfile, tier, result, "none")
     return 2
 
 
@@ -168,7 +170,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return run(a)
     except Exception as e:
-        return _blind(a.textfile, getattr(a, "tier", None) or a.cmd, f"{type(e).__name__}: {e}")
+        # Still exit 2 either way; only the COUNTER differs. An unknown tier is the caller's
+        # mistake and the fence's inputs are healthy, so it must not read as `blind` (fence.UnknownTier).
+        result = "invalid" if isinstance(e, fence.UnknownTier) else "blind"
+        return _blind(a.textfile, getattr(a, "tier", None) or a.cmd, f"{type(e).__name__}: {e}", result)
 
 
 if __name__ == "__main__":

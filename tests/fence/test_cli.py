@@ -46,6 +46,25 @@ def test_exit_codes_and_record(capsys: pytest.CaptureFixture[str], cache: Path, 
     assert 'edge_fence_decisions_total{tier="service",result="allow",source="cache"} 1' in prom
     assert 'edge_fence_decisions_total{tier="service",result="blind",source="none"} 1' in prom
     assert 'edge_fence_last_decision_timestamp_seconds{tier="service"}' in prom
+    # BOTH DIRECTIONS: an unknown tier is exit 2 like blindness, but counted `invalid` and never
+    # `blind` (EdgeFenceBlind fired for an hour on a hand probe of `--tier caddy`, 2026-11-11),
+    # while a bad instant on a REAL tier stays `blind` (asserted just above).
+    assert 'edge_fence_decisions_total{tier="nope",result="invalid",source="none"} 1' in prom
+    assert 'tier="nope",result="blind"' not in prom
+
+
+def test_a_malformed_policy_is_blind_not_invalid(
+    capsys: pytest.CaptureFixture[str], cache: Path, tmp_path: Path
+) -> None:
+    """UnknownTier subclasses PolicyError; the parent (an unusable policy file) must stay `blind`."""
+    tf = tmp_path / "edge_fence.prom"
+    bad = tmp_path / "policy.json"
+    bad.write_text("{}", encoding="utf-8")
+    rc, rec = _run(
+        capsys, "--cache", str(cache), "--textfile", str(tf), "--policy", str(bad), "check", "--tier", "service"
+    )
+    assert rc == 2 and rec["source"] == "none"
+    assert 'edge_fence_decisions_total{tier="service",result="blind",source="none"} 1' in tf.read_text(encoding="utf-8")
 
 
 def test_epoch_and_offset_instants(capsys: pytest.CaptureFixture[str], cache: Path) -> None:

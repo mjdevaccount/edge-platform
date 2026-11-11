@@ -1,6 +1,6 @@
 [project]
 name = "edge-platform"
-version = "0.5.0"
+version = "0.5.1"
 description = "EDGE's shared platform package: the ntfy.sh push budget (notify), the trading-hours deploy fence (fence), the compose-rules .env reader (env) and the FastAPI service composition root (service)."
 readme = "README.md"
 license = "MIT"
