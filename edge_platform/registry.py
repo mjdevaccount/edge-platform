@@ -42,7 +42,7 @@ class Registry(MutableMapping[str, S], Generic[S]):
     match on it), so it is a parameter, not a rewrite.
     """
 
-    __slots__ = ("_identical_ok", "_items", "_key", "_label", "_verb")
+    __slots__ = ("_frozen", "_identical_ok", "_items", "_key", "_label", "_verb")
 
     def __init__(
         self,
@@ -57,6 +57,7 @@ class Registry(MutableMapping[str, S], Generic[S]):
         self._label = label
         self._identical_ok = identical_ok
         self._verb = verb
+        self._frozen = False
 
     # -- the guard ---------------------------------------------------------------------------
     def add(self, spec: S) -> S:
@@ -68,6 +69,8 @@ class Registry(MutableMapping[str, S], Generic[S]):
         `__eq__` -- and one that were would be a spec design bug, not a reason to keep the newer
         copy."""
         k = self._key(spec)
+        if self._frozen:
+            raise RuntimeError(f"{self._label} registry is frozen: {k!r} arrived after load")
         have = self._items.get(k)
         if have is not None:
             if self._identical_ok and have == spec:
@@ -78,8 +81,22 @@ class Registry(MutableMapping[str, S], Generic[S]):
         self._items[k] = spec
         return spec
 
+    def key_of(self, spec: S) -> str:
+        """The id this registry files `spec` under."""
+        return self._key(spec)
+
+    def freeze(self) -> None:
+        """Refuse every later `add` (and item write): the composition root has finished loading. One
+        way -- there is no thaw; a test that needs a writable table swaps in `empty()`. Removal stays
+        raw (see below), so teardown still works."""
+        self._frozen = True
+
+    @property
+    def frozen(self) -> bool:
+        return self._frozen
+
     def empty(self) -> Registry[S]:
-        """A fresh table with the same policy -- what a test swaps in for isolation."""
+        """A fresh table with the same policy, NOT frozen -- what a test swaps in for isolation."""
         return Registry(self._label, self._key, identical_ok=self._identical_ok, verb=self._verb)
 
     # -- MutableMapping. A raw item write is GUARDED too (`update` and `setdefault` land here; `|=`
