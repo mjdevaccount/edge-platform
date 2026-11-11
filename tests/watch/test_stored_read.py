@@ -68,7 +68,7 @@ def test_an_off_session_gated_spec_is_the_skip_row_and_not_stale() -> None:
     rig.session_day = False
     out = run(rig.runner.read_stored(object(), now=now(9, 40)))
     row = out["results"][0]
-    assert row["skipped"] is True and row["status"] == "ok" and row["stale"] is False and out["stale"] == []
+    assert row["skipped"] is True and row["status"] == "idle" and row["stale"] is False and out["stale"] == []
 
 
 def test_an_observe_only_down_never_says_it_would_page() -> None:

@@ -7,8 +7,9 @@ contract exists against: **a guard that exists somewhere it cannot fire** -- a w
 memory was erased by every deploy, or whose bespoke wall-clock gate judged a holiday a session, is
 indistinguishable from one that works until the day it pages wrong, or does not page at all.
 
-    Status         closed vocabulary: OK / WARN / DOWN / INSUFFICIENT / UNKNOWN. INSUFFICIENT is
-                   "not enough evidence to judge" and never pages; UNKNOWN is "the probe failed".
+    Status         closed vocabulary: OK / WARN / DOWN / INSUFFICIENT / UNKNOWN / IDLE. INSUFFICIENT
+                   is "not enough evidence to judge" and never pages; UNKNOWN is "the probe failed";
+                   IDLE is "not evaluated" (a gated spec off-session), never "ok".
     Probe          one evaluation: (status, detail, metrics, subjects).
     WatchdogSpec   the declaration: id, description, owner, severity (p2|p3 ONLY -- a scheduled
                    check can never page p1, the alert-budget law), market_gated, the probe.
@@ -44,6 +45,9 @@ class Status(StrEnum):
     DOWN = "down"
     INSUFFICIENT = "insufficient"  # not enough evidence to judge -- never pages
     UNKNOWN = "unknown"  # the probe itself failed
+    #: not evaluated: a market-gated spec off-session (v0.11). Never pages, and is NOT "ok" -- a
+    #: watchdog that has never run must not read as one that ran and passed.
+    IDLE = "idle"
 
 
 #: Only DOWN pages. WARN surfaces in the result but stays out of the phone budget; INSUFFICIENT

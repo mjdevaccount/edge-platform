@@ -97,7 +97,7 @@ def test_a_delivery_row_reaches_the_series() -> None:
             tables = await _setup(maker, schema)
             led = SqlLedger(maker, tables)
             n = Notifier(transport=RecordingTransport(outcome=Outcome.FAILED, detail="HTTP 500"), ledger=led)
-            d = await n.notify(Notice(Channel("it-gauge"), key="k", title="t", body="b"))
+            d = await n.notify(Notice(Channel("it-gauge"), key="k", title="t", body="b", tier="p3"))
             assert (d.outcome, d.recorded) == (Outcome.FAILED, True)
             got = {(lb["scope"], lb["outcome"]): v for lb, v in outcome_series(await led.outcomes_24h())}
             assert got[("it-gauge", "failed")] == 1.0 and got[("it-gauge", "sent")] == 0.0

@@ -26,7 +26,7 @@ def _scope(tag: str) -> str:
 
 
 def _notice(ch: Channel, key: str) -> Notice:
-    return Notice(ch, key=key, title=f"t {key}", body="b")
+    return Notice(ch, key=key, title=f"t {key}", body="b", tier="p3")
 
 
 async def once_dedups_forever(ledger: Any, age: Age) -> None:
@@ -76,10 +76,13 @@ async def caller_dedup_admits_every_notice(ledger: Any, age: Age) -> None:
 
 
 async def et_week_budget_counts_the_et_week(ledger: Any, age: Age) -> None:
-    ch = Channel(_scope("week"), budget=Budget(1, "et_iso_week"))
+    ch = Channel(_scope("week"), budget=Budget(1, "iso_week", tz="America/New_York"))
     sunday_night_et = dt.datetime(2026, 10, 26, 3, 0, tzinfo=dt.UTC)  # Sun 23:00 ET, W43
     assert await ledger.admit(_notice(ch, "a"), sunday_night_et) == (None, None)
-    assert await ledger.admit(_notice(ch, "b"), sunday_night_et) == (Outcome.BUDGET_REFUSED, "et-week:2026-W43")
+    assert await ledger.admit(_notice(ch, "b"), sunday_night_et) == (
+        Outcome.BUDGET_REFUSED,
+        "iso-week:America/New_York:2026-W43",
+    )
     assert await ledger.admit(_notice(ch, "c"), sunday_night_et + dt.timedelta(hours=2)) == (None, None)  # W44
 
 

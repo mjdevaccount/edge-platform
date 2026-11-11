@@ -1,7 +1,7 @@
 [project]
 name = "edge-platform"
-version = "0.10.1"
-description = "EDGE's shared platform package: the ntfy.sh push budget (notify), the trading-hours deploy fence (fence), the compose-rules .env reader (env), the duplicate-guarded spec registry (registry), the FastAPI service kit (service), shipped Windmill step templates (windmill), ingest lanes (lanes), the watchdog plane (watch) and fingerprints (stamp)."
+version = "0.11.0"
+description = "EDGE's shared platform package: the ntfy.sh push budget (notify), the trading-hours deploy fence (fence), the compose-rules .env reader (env), the duplicate-guarded spec registry (registry), the FastAPI service kit (service), shipped Windmill step templates (windmill), ingest lanes (lanes), the watchdog plane (watch), fingerprints (stamp), the shared Postgres rate budget (budget), the plugin loader (plugins) and typed configuration (config)."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -27,10 +27,16 @@ service = [
     "sqlalchemy[asyncio]>=2.0.36",
     "structlog>=24.4",
 ]
-# The async-SQL stores: edge_platform.watch.state (the watchdog dedup memory) and
-# edge_platform.notify.ledger (claims / budget / deliveries). Table names are the consumer's.
+# The async-SQL stores: edge_platform.watch.state (the watchdog dedup memory),
+# edge_platform.notify.ledger (claims / budget / deliveries) and edge_platform.budget (the shared
+# vendor rate window). Table names are the consumer's.
 sql = [
     "sqlalchemy[asyncio]>=2.0.36",
+]
+# edge_platform.plugins: the strict entry-point loader over pluggy (R1-R10, plugins.py docstring), and
+# edge_platform.testing.plugin_conformance, the suite a consumer runs against its own group (needs pytest).
+plugins = [
+    "pluggy>=1.7",
 ]
 # edge_platform.lanes: dlt land/promote + the no-TRUNCATE postgres destination. The LaneSpec core,
 # source gate and freshness verdict are stdlib and import without it.
@@ -50,11 +56,12 @@ packages = ["edge_platform"]
 dev = [
     "aiosqlite>=0.21",
     "asyncpg>=0.30",
-    "edge-platform[dlt,service,sql]",
+    "edge-platform[dlt,plugins,service,sql]",
     "exchange-calendars>=4.13.2",
     "httpx>=0.28",
     "pytest>=8.3",
     "ruff>=0.15",
+    "testcontainers[postgres]>=4.10",
 ]
 
 [tool.ruff]
