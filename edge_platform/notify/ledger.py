@@ -11,7 +11,7 @@ short session from the injected session maker: the caller's transaction never ca
 so its rollback cannot erase one.
 
 `outcome_series(rows)` shapes `NotifyStore.outcomes_24h()` into the (labels, value) series an outside
-watcher alerts on (trade-data renders them as `edge_notify_outcomes_24h{scope,outcome}`): a total
+watcher alerts on (e.g. a `{scope,outcome}`-labelled gauge): a total
 per outcome under `scope=_all` ALWAYS present, every scope seen in 7 days filled with zeros, and
 BLIND IS NOT ZERO -- an unreadable ledger is None for every total (renders NaN, never "nothing
 failed").

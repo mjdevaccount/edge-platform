@@ -143,7 +143,7 @@ class WatchRunner:
     """One consumer's watchdog plane. Every estate fact is an argument:
 
     registry          the consumer's WatchRegistry
-    store             session -> StateStore (e.g. `WatchdogStateStore.bind("ops.watchdog_state")`)
+    store             session -> StateStore (e.g. `WatchdogStateStore.bind("myschema.watchdog_state")`)
     session_day       now -> is this a trading session day (the market gate)
     page              (spec, probe) -> pushed? (e.g. `watch.pager.notify_pager(notifier, channel)`)
     now               the clock; its zone is the zone a gated row's "day start" is counted in

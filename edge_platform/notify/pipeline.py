@@ -23,6 +23,9 @@ FAILURE TELEMETRY -- every signal survives as the injected `on_degraded(reason)`
                                    goes out undeduplicated and `Delivery.recorded` is False; a
                                    channel declaring on_ledger_down="local" keeps its own dedup +
                                    budget in this Notifier's LocalLedger instead.
+  `notify_clock_blind`             admit could not place `now` in a budget window (no tzdata for
+                                   an ET window): the same fail-open, named for its real cause.
+  `notify_local_ledger_failed`     the LocalLedger fallback itself raised: pushed undeduplicated.
 The delivery rows themselves are the outside watcher's input (`ledger.outcome_series`).
 
 WHAT IS INJECTED: the Transport (trade-data: its ntfy client), the Ledger (`ledger.SqlLedger` over the
@@ -40,6 +43,8 @@ import datetime as dt
 import logging
 from collections.abc import Callable
 from typing import Protocol
+
+from edge_platform.fence.sessions import ClockBlind
 
 from .local import LocalLedger
 from .types import Channel, Delivery, Notice, Outcome, delivered_for
@@ -112,13 +117,14 @@ class Notifier:
         if override is not None:
             return override
         t = self._transport
-        return t if hasattr(t, "publish") else t()  # type: ignore[operator,return-value]
+        # a CLASS has the attribute too: it is a factory, never an instance
+        return t() if isinstance(t, type) or not hasattr(t, "publish") else t  # type: ignore[operator,return-value]
 
     def _resolve_ledger(self, override: Ledger | None) -> Ledger:
         if override is not None:
             return override
         led = self._ledger
-        return led if hasattr(led, "admit") else led()  # type: ignore[operator,return-value]
+        return led() if isinstance(led, type) or not hasattr(led, "admit") else led  # type: ignore[operator,return-value]
 
     def _degraded(self, reason: str) -> None:
         if self._on_degraded is None:
@@ -135,13 +141,28 @@ class Notifier:
 
     async def _publish(self, transport: Transport, notice: Notice) -> tuple[Outcome, str | None]:
         try:
-            return await transport.publish(
+            raw, detail = await transport.publish(
                 title=notice.title, body=notice.body, severity=notice.severity, tags=list(notice.tags) or None,
                 tier=notice.tier, market=notice.channel.market, actions=list(notice.actions) or None,
             )  # fmt: skip
         except Exception as exc:  # publish() never raises by contract; a broken one still records
             log.exception("notify transport raised scope=%s", notice.channel.scope)
             return Outcome.FAILED, f"{exc.__class__.__name__}: {str(exc)[:160]}"
+        try:
+            # a transport returning the bare string "failed" must still COUNT as failed downstream
+            return Outcome(raw), detail
+        except ValueError:
+            log.error("notify transport returned an unknown outcome %r scope=%s", raw, notice.channel.scope)
+            return Outcome.FAILED, f"unknown transport outcome {raw!r}"[:200]
+
+    async def _local_admit(self, notice: Notice, now: dt.datetime) -> tuple[Outcome | None, str | None]:
+        """The outage fallback, guarded: a fallback that raises must not turn a fail-open into a raise."""
+        try:
+            return await self.local.admit(notice, now)
+        except Exception:
+            log.exception("notify local ledger failed -- pushing undeduplicated scope=%s", notice.channel.scope)
+            self._degraded("notify_local_ledger_failed")
+            return None, None
 
     async def first_sight(
         self, channel: Channel, keys: list[str], *, ledger: Ledger | None = None, now: dt.datetime | None = None
@@ -154,10 +175,10 @@ class Notifier:
         `notify_ledger_unavailable` is raised, the same signal notify() raises."""
         if not channel.dedup.claims or channel.budget is not None:
             raise ValueError("first_sight needs a claims-only channel (Dedup.once/window, no budget)")
-        led = self._resolve_ledger(ledger)
-        now = now or self._now()
         fresh: set[str] = set()
         try:
+            led = self._resolve_ledger(ledger)
+            now = now or self._now()
             for key in keys:
                 refused, _ = await led.admit(Notice(channel, key=key, title=key, body=""), now)
                 if refused is None:
@@ -183,12 +204,12 @@ class Notifier:
             led = self._resolve_ledger(ledger)
             tier = self.tier_for(notice.severity, notice.tier)
             disabled = tx.disabled()
+            now = now or self._now()
         except Exception as exc:
             # a transport/ledger that cannot even be BUILT is a page that did not leave
             log.exception("notify could not resolve its ports scope=%s", ch.scope)
             self._degraded(f"notify_failed:{ch.scope}")
             return Delivery(ch.scope, notice.key, Outcome.FAILED, False, f"{type(exc).__name__}: {exc}"[:200], False)
-        now = now or self._now()
 
         detail: str | None = None
         ledger_ok = True
@@ -197,15 +218,15 @@ class Notifier:
         else:
             try:
                 refused, detail = await led.admit(notice, now)
-            except Exception:
+            except Exception as exc:
                 local = ch.on_ledger_down == "local"
                 log.exception(
                     "notify ledger unavailable -- %s scope=%s",
                     "process-local dedup+budget" if local else "pushing undeduplicated", ch.scope,
                 )  # fmt: skip
-                self._degraded("notify_ledger_unavailable")
+                self._degraded("notify_clock_blind" if isinstance(exc, ClockBlind) else "notify_ledger_unavailable")
                 ledger_ok = False
-                refused, detail = await self.local.admit(notice, now) if local else (None, None)
+                refused, detail = await self._local_admit(notice, now) if local else (None, None)
             if refused is Outcome.DEDUPED:
                 log.debug("notify deduped scope=%s key=%s", ch.scope, notice.key)
                 return Delivery(ch.scope, notice.key, Outcome.DEDUPED, False, recorded=ledger_ok)
@@ -226,6 +247,6 @@ class Notifier:
                 await led.record(notice, tier=tier, outcome=outcome, delivered=delivered, detail=detail)
                 recorded = True
             except Exception:
-                log.exception("notify delivery record failed scope=%s outcome=%s", ch.scope, outcome.value)
+                log.exception("notify delivery record failed scope=%s outcome=%s", ch.scope, outcome)
                 self._degraded("notify_ledger_unavailable")
         return Delivery(ch.scope, notice.key, outcome, delivered, detail, recorded)
