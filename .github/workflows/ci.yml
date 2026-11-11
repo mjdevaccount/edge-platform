@@ -36,9 +36,14 @@ jobs:
         run: |
           uv build
           uvx --from dist/edge_platform-*.whl edge-notify check-pin
-          uvx --from dist/edge_platform-*.whl edge-notify senders
+          # v0.6.0: the sender registry and the fence policy are the CONSUMER's; the wheel carries
+          # neither, so the CLI is run against the test fixtures -- and must refuse (2) with none.
+          uvx --from dist/edge_platform-*.whl edge-notify senders --registry tests/fixtures/ntfy-publishers.json
           uvx --from dist/edge_platform-*.whl edge-fence status
-          uvx --from dist/edge_platform-*.whl edge-fence check --tier service --at 2025-11-29T12:00
+          uvx --from dist/edge_platform-*.whl edge-fence --policy tests/fence/fixtures/fence-policy.json check --tier service --at 2025-11-29T12:00
+          set +e; env -u EDGE_FENCE_POLICY uvx --from dist/edge_platform-*.whl edge-fence check --tier service --at 2025-11-29T12:00; rc=$?; set -e
+          [ "$rc" = 2 ] || { echo "::error::edge-fence with no policy gave rc=$rc (want 2)"; exit 1; }
+          ! unzip -l dist/edge_platform-*.whl | grep -E 'fence-policy|ntfy-publishers' || { echo "::error::the wheel ships estate config"; exit 1; }
           uvx --from dist/edge_platform-*.whl edge-env check-copy edge_platform/env/lib-env.sh edge_platform/env/lib_env.py
           sh=$(uvx --from dist/edge_platform-*.whl edge-env path sh) && bash -n "$sh"
           # the [service] extra resolves from the wheel's own metadata and every tenant module imports

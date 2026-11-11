@@ -1,12 +1,13 @@
 """`edge-notify` -- the policy for consumers that are not Python, and the gates they run.
 
-  edge-notify path [policy|cases|publishers]   print the packaged file's path (cp it, hash it)
+  edge-notify path [policy|cases]              print the packaged file's path (cp it, hash it)
   edge-notify shell [POLICY]                   `_ENP_<NAME>='<v>'` lines for lib-notify.sh to eval
   edge-notify rows [CASES]                     the shared cases as TAB rows for a bash test
   edge-notify check-pin [POLICY [CASES]]       exit 1 unless CASES pins POLICY's LF sha256
   edge-notify check-copy FILE                  exit 1 unless FILE is byte-identical (LF) to the release's policy
   edge-notify am-night ALERTMANAGER_YML        exit 1 unless the AM night mute == policy.night
-  edge-notify senders                          validate the registry against the policy; list it
+  edge-notify senders [--registry FILE]        validate the registry against the policy; list it
+                                               (FILE or $EDGE_NOTIFY_PUBLISHERS: the consumer's, v0.6.0)
 
 Exit 0 = clean, 1 = findings, 2 = BLIND (unreadable / invalid input): a crashed check must never
 look like a passing one.
@@ -28,7 +29,7 @@ NL = chr(10)
 def _p(argv: list[str] | None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="edge-notify", description=__doc__.split(NL)[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("path").add_argument("which", nargs="?", default="policy", choices=["policy", "cases", "publishers"])
+    sub.add_parser("path").add_argument("which", nargs="?", default="policy", choices=["policy", "cases"])
     sub.add_parser("shell").add_argument("policy", nargs="?", type=Path, default=pol.POLICY_PATH)
     sub.add_parser("rows").add_argument("cases", nargs="?", type=Path, default=pol.CASES_PATH)
     cp = sub.add_parser("check-pin")
@@ -38,7 +39,7 @@ def _p(argv: list[str] | None) -> argparse.Namespace:
     am = sub.add_parser("am-night")
     am.add_argument("alertmanager_yml", type=Path)
     am.add_argument("--interval", default="quiet-night")
-    sub.add_parser("senders")
+    sub.add_parser("senders").add_argument("--registry", type=Path, default=None)
     return ap.parse_args(argv)
 
 
@@ -51,7 +52,7 @@ def _report(name: str, found: list[str], ok: str) -> int:
 
 def run(a: argparse.Namespace) -> int:
     if a.cmd == "path":
-        print({"policy": pol.POLICY_PATH, "cases": pol.CASES_PATH, "publishers": pubs.REGISTRY_PATH}[a.which])
+        print({"policy": pol.POLICY_PATH, "cases": pol.CASES_PATH}[a.which])
         return 0
     if a.cmd == "shell":
         print(NL.join(pol.shell_lines(pol.load(a.policy))))
@@ -77,7 +78,7 @@ def run(a: argparse.Namespace) -> int:
             "alertmanager night", found, f"{a.interval} == {p.night_start:02d}:00-{p.night_end:02d}:00 {p.night_tz}"
         )
     if a.cmd == "senders":
-        senders = pubs.load()
+        senders = pubs.load(a.registry)
         for s in senders:
             print(f"  {s.mode:9} {s.route:10} {s.name:34} {s.repo}")
         open_ = pubs.uncounted(senders)

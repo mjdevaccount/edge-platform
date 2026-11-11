@@ -99,3 +99,15 @@ def test_bad_usage_is_blind() -> None:
     assert cli.main([]) == 2
     assert cli.main(["check-copy"]) == 2
     assert cli.main(["path", "rb"]) == 2
+
+
+def test_no_file_named_is_blind_never_a_home_dir_guess(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("EDGE_INFRA_ENV", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    with pytest.raises(EnvBlind, match="EDGE_INFRA_ENV"):
+        lib_env.get("FX_A")
+    assert lib_env.main(["get", "FX_A"]) == 2
+    f = tmp_path / "x.env"
+    f.write_text("FX_A=1" + chr(10), encoding="utf-8")
+    monkeypatch.setenv("EDGE_INFRA_ENV", str(f))
+    assert lib_env.get("FX_A") == "1"  # read at call time, not import time

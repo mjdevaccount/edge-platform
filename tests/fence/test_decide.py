@@ -5,14 +5,13 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-from importlib import resources
 from pathlib import Path
 
 import pytest
 
 from edge_platform.fence import ClockBlind, Loaded, PolicyError, Sessions, decide, load_policy
-from edge_platform.fence import sessions as sess
 
+from ..conftest import FENCE_POLICY
 from .test_sessions import FX, _now, et, z
 
 M = dt.timedelta(minutes=1)
@@ -73,7 +72,7 @@ def test_override_allows_and_says_so(loaded: Loaded) -> None:
 
 
 def test_blackout(tmp_path: Path, loaded: Loaded) -> None:
-    raw = json.loads(resources.files(sess.__package__).joinpath("fence-policy.json").read_text(encoding="utf-8"))
+    raw = json.loads(FENCE_POLICY.read_text(encoding="utf-8"))
     raw["blackouts"] = [{"start_et": "17:20", "end_et": "19:00", "why": "nightly chain"}]
     p = tmp_path / "p.json"
     p.write_text(json.dumps(raw), encoding="utf-8")
@@ -150,3 +149,13 @@ def test_need_exactly_equal_to_the_gap_is_allowed(loaded: Loaded) -> None:
     d = decide("service", at=et("2025-11-26T08:30:00"), need=46 * M, loaded=loaded)
     assert not d.allowed and d.reason == "less than 46m before the next window"
     assert d.next_open_window == "2025-11-26T21:35:00Z"
+
+
+def test_no_policy_configured_is_an_error_never_a_default(monkeypatch: pytest.MonkeyPatch, loaded: Loaded) -> None:
+    """v0.6.0: the package carries no estate's tiers. Nothing named = PolicyError (exit 2)."""
+    monkeypatch.delenv("EDGE_FENCE_POLICY")
+    with pytest.raises(PolicyError, match="EDGE_FENCE_POLICY"):
+        load_policy()
+    with pytest.raises(PolicyError, match="no fence policy configured"):
+        decide("service", at=et("2025-11-26T10:00"), loaded=loaded)
+    assert load_policy(FENCE_POLICY).tiers  # an explicit path needs no environment

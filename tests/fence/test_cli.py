@@ -155,3 +155,13 @@ def test_written_files_are_world_readable(tmp_path: Path) -> None:
     cache = tmp_path / "sessions.json"
     write_cache({"schema": 1}, cache)
     assert stat.S_IMODE(cache.stat().st_mode) == 0o644
+
+
+def test_no_policy_configured_is_blind(
+    capsys: pytest.CaptureFixture[str], cache: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("EDGE_FENCE_POLICY")
+    tf = tmp_path / "edge_fence.prom"
+    rc, rec = _run(capsys, "--cache", str(cache), "--textfile", str(tf), "check", "--tier", "service")
+    assert rc == 2 and "EDGE_FENCE_POLICY" in rec["reason"]
+    assert 'tier="service",result="blind"' in tf.read_text(encoding="utf-8")

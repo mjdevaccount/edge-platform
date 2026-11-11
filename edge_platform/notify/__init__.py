@@ -4,12 +4,12 @@
 """
 
 from .policy import CASES_PATH, POLICY_PATH, NtfyPolicy, check_pin, load, parse, sha256_lf
-from .publishers import REGISTRY_PATH, Sender
+from .publishers import REGISTRY_ENV, Sender
 
 __all__ = [
     "CASES_PATH",
     "POLICY_PATH",
-    "REGISTRY_PATH",
+    "REGISTRY_ENV",
     "NtfyPolicy",
     "Sender",
     "check_pin",

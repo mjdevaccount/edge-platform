@@ -35,15 +35,19 @@
 #                          `set -e`, `v=$(env_get K F)` EXITS on 1 -- write `v=$(env_get K F) || true`
 #                          where absent is normal, and decide your own side of 2.
 #   env_has KEY [FILE]  -> rc only, same codes
-#   FILE defaults to $EDGE_INFRA_ENV, else ~/edge/trade-infra/.env (the stack's one .env).
+#   FILE defaults to $ENV_DEFAULT_FILE, else $EDGE_INFRA_ENV, both read at CALL time. Neither set
+#   and no FILE = BLIND (rc 2): there is no built-in path (until v0.6.0 it was ~/edge/trade-infra/.env,
+#   one estate's layout inside a public package).
 #
 # This file does NOT honour an exported KEY over the file: that is the caller's policy (lib-lan's
 # lan_gateway does it on purpose). An exported variable only feeds ${...} inside the file, as in
 # compose. Needs only bash + POSIX awk (mawk on the box).
-ENV_DEFAULT_FILE="${ENV_DEFAULT_FILE:-${EDGE_INFRA_ENV:-${HOME:-/home/matt}/edge/trade-infra/.env}}"
-
 env_get() {  # env_get KEY [FILE]
-  local f="${2:-$ENV_DEFAULT_FILE}"
+  local f="${2:-${ENV_DEFAULT_FILE:-${EDGE_INFRA_ENV:-}}}"
+  if [ -z "$f" ]; then
+    printf 'lib-env: BLIND no .env file named: pass FILE or set EDGE_INFRA_ENV\n' >&2
+    return 2
+  fi
   if [ ! -r "$f" ] || [ -d "$f" ]; then
     printf 'lib-env: BLIND %s: cannot read\n' "$f" >&2
     return 2

@@ -21,8 +21,8 @@ def test_shell_and_rows_and_path(capsys):
     assert rc == 0 and "_ENP_RESERVE='75'" in out
     rc, out = _run(capsys, "rows")
     assert rc == 0 and out.startswith("decide\t")
-    rc, out = _run(capsys, "path", "publishers")
-    assert rc == 0 and out.strip().endswith("ntfy-publishers.json")
+    rc, out = _run(capsys, "path", "cases")
+    assert rc == 0 and out.strip().endswith("ntfy-policy.cases.json")
 
 
 def test_check_pin_and_check_copy_both_ways(capsys, tmp_path):
@@ -65,3 +65,15 @@ def test_a_usage_error_is_blind_and_help_is_clean(capsys):
     assert _run(capsys, "no-such-command")[0] == 2  # argparse's own exit, never read as 1 = findings
     assert _run(capsys, "am-night")[0] == 2  # missing required argument
     assert _run(capsys, "--help")[0] == 0
+
+
+def test_senders_needs_a_registry_and_reads_the_one_named(capsys, monkeypatch, tmp_path):
+    from .conftest import PUBLISHERS
+
+    monkeypatch.delenv("EDGE_NOTIFY_PUBLISHERS")
+    rc, out = _run(capsys, "senders")
+    assert rc == 2 and "EDGE_NOTIFY_PUBLISHERS" in out  # nothing configured: BLIND, never a default
+    rc, out = _run(capsys, "senders", "--registry", str(PUBLISHERS))
+    assert rc == 0 and "ntfy senders: OK" in out
+    rc, _ = _run(capsys, "senders", "--registry", str(tmp_path / "absent.json"))
+    assert rc == 2

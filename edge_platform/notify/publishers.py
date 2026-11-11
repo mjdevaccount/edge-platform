@@ -2,18 +2,23 @@
 
 A separate file from the policy on purpose: the policy's bytes are sha256-pinned by every
 consumer's cases file, and a new sender must not move that pin. Stdlib only, like policy.py.
+
+The REGISTRY is the consumer's (v0.6.0): an estate's sender inventory is its own data, so the
+package ships the schema and the checks, and reads the file from `load(path)`, else
+`$EDGE_NOTIFY_PUBLISHERS`. Neither is a ValueError (the CLI's exit 2), never a default.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .policy import NtfyPolicy, packaged
+from .policy import NtfyPolicy
 
-REGISTRY_PATH = packaged("ntfy-publishers.json")
+REGISTRY_ENV = "EDGE_NOTIFY_PUBLISHERS"
 ROUTES = frozenset({"library", "direct", "am-webhook", "gatus", "ci"})
 MODES = frozenset({"gated", "counted", "exempt", "uncounted"})
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
@@ -89,8 +94,16 @@ def parse(raw: dict) -> tuple[Sender, ...]:
     return tuple(out)
 
 
-def load(path: Path = REGISTRY_PATH) -> tuple[Sender, ...]:
-    return parse(json.loads(path.read_text(encoding="utf-8")))
+def registry_path(path: Path | str | None = None) -> Path:
+    """The registry file: PATH, else `$EDGE_NOTIFY_PUBLISHERS`. Neither = ValueError naming both."""
+    p = path or os.environ.get(REGISTRY_ENV)
+    if not p:
+        raise ValueError(f"no sender registry configured: pass --registry / load(path) or set {REGISTRY_ENV}")
+    return Path(p)
+
+
+def load(path: Path | str | None = None) -> tuple[Sender, ...]:
+    return parse(json.loads(registry_path(path).read_text(encoding="utf-8")))
 
 
 def policy_findings(senders: tuple[Sender, ...], policy: NtfyPolicy) -> list[str]:

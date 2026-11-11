@@ -15,15 +15,18 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass, field
-from importlib import resources
 from pathlib import Path
 from typing import Any
 
 from .sessions import ClockBlind, Loaded, Sessions, et, tz_ok
 
-POLICY = "fence-policy.json"
+#: The policy is the CONSUMER's (v0.6.0): which tiers exist, which are fenced and why, are one
+#: estate's decisions, so the package ships the mechanism and reads the policy from a path --
+#: `load_policy(path)`, else `$EDGE_FENCE_POLICY`. Neither is PolicyError (exit 2), never a default.
+POLICY_ENV = "EDGE_FENCE_POLICY"
 
 
 class PolicyError(ValueError):
@@ -67,10 +70,22 @@ def _hm(s: str) -> dt.time:
         raise PolicyError(f"not an HH:MM time: {s!r}") from e
 
 
-def load_policy(path: Path | None = None) -> Policy:
+def policy_path(path: Path | str | None = None) -> Path:
+    """The policy file to read: PATH, else `$EDGE_FENCE_POLICY`. Neither = PolicyError naming both."""
+    p = path or os.environ.get(POLICY_ENV)
+    if not p:
+        raise PolicyError(f"no fence policy configured: pass --policy / load_policy(path) or set {POLICY_ENV}")
+    return Path(p)
+
+
+def load_policy(path: Path | str | None = None) -> Policy:
     import hashlib
 
-    raw = path.read_bytes() if path else resources.files(__package__).joinpath(POLICY).read_bytes()
+    src = policy_path(path)
+    try:
+        raw = src.read_bytes()
+    except OSError as e:
+        raise PolicyError(f"fence policy {src}: cannot read ({type(e).__name__})") from e
     try:
         doc = json.loads(raw)
         if doc.get("schema") != 1:
