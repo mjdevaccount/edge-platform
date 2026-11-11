@@ -36,7 +36,7 @@ CLI (`python -m edge_platform.config lint|schema|catalog module:ATTR [--check PA
 exit 0 clean, 1 findings or drift, 2 could not load the domains or run.
 """
 
-from .knobs import FINGERPRINTED, MASK, ConfigError, Domain, KnobClass, Source, knob
+from .knobs import FINGERPRINTED, MASK, SECRET_AMBIGUOUS, SECRET_NAMED, ConfigError, Domain, KnobClass, Source, knob
 from .render import (
     SECRET_LOOKING,
     Effective,
@@ -54,7 +54,9 @@ from .render import (
 __all__ = [
     "FINGERPRINTED",
     "MASK",
+    "SECRET_AMBIGUOUS",
     "SECRET_LOOKING",
+    "SECRET_NAMED",
     "ConfigError",
     "Domain",
     "Effective",

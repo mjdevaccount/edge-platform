@@ -21,7 +21,9 @@ INVARIANTS
   `statement_timeout` are set LOCAL (never an unbounded block). THE LOCK RULE (`LOCK_FLOOR_S`): a
   row-lock wait is CONTENTION -- re-asked inside `max_wait`, then one more `LOCK_FLOOR_S` attempt,
   ending granted or `BudgetExhausted` and counted `lock_contended`; only a lock held past
-  `max_wait + LOCK_FLOOR_S` (a hung transaction) is `BudgetUnavailable`. Waiting holds no
+  `max_wait + LOCK_FLOOR_S` (a hung transaction) is `BudgetUnavailable`; our statement_timeout
+  firing is a SLOW STORE (`store_slow`, said as such). TRUE BOUND: `acquire` ends within
+  `max_wait + MAX_OVERRUN_S` (4.05s) of DB time, connection checkout excluded. Waiting holds no
   connection: the sleep is outside any transaction (with a little jitter so waiters do not wake in
   lockstep), and a refused attempt re-asks after the window the DB names.
 - FAILS CLOSED: a store error raises `BudgetUnavailable` -- never a silent grant. There is no default
@@ -39,7 +41,7 @@ INVARIANTS
 TELEMETRY (what fails silently, where it lands): `stats` holds the per-process counters --
 wait_seconds / wait_events (a starved lane), exhausted / unavailable (a lane refused, or the store
 down or its row lock stuck -- the PAGING counter), lock_contended (row-lock waits that timed out:
-a queue, not an outage), observe_invalid (malformed vendor headers ignored), flush_failed (the
+a queue, not an outage), store_slow (our statement_timeout fired), observe_invalid (malformed vendor headers ignored), flush_failed (the
 vendor reading did not land), flush_stale (a reading that arrived after its window closed),
 config_conflict -- and `stats.series()` renders them as `budget_*_total{key}` for the consumer's
 textfile / exporter. The ROW is the outside view: `updated_at` stale while the lane should
@@ -80,12 +82,15 @@ _OBSERVE_SKEW_S = 300.0
 _EPOCH_FLOOR = dt.datetime(2000, 1, 1, tzinfo=dt.UTC)
 #: THE LOCK RULE. Waiting on the row lock is CONTENTION, not unavailability: every process serialises
 #: on one row and each holder keeps it for one millisecond-scale statement. An attempt waits for the
-#: lock up to the remaining `max_wait`; a lock timeout (55P03, or 57014 when it was OUR statement
-#: bound) inside `max_wait` re-asks, counted `stats.lock_contended`. Once `max_wait` is spent, ONE
-#: last attempt waits LOCK_FLOOR_S more -- ordinary contention (a queue of waiters woken together at a
-#: window end) clears in that, and the attempt grants or raises BudgetExhausted like any other. Only a
-#: lock held past `max_wait + LOCK_FLOOR_S` -- a hung transaction, not a queue -- is BudgetUnavailable
+#: lock up to the remaining `max_wait`; a lock timeout (55P03) inside `max_wait` re-asks, counted
+#: `stats.lock_contended`. Once `max_wait` is spent, ONE last attempt waits LOCK_FLOOR_S more --
+#: ordinary contention (a queue of waiters woken together at a window end) clears in that, and the
+#: attempt grants or raises BudgetExhausted like any other. Only a lock held past
+#: `max_wait + LOCK_FLOOR_S` -- a hung transaction, not a queue -- is BudgetUnavailable
 #: (`budget_unavailable_total` is the PAGING counter, so contention must never reach it).
+#: A SLOW STORE is the other bound: OUR statement_timeout (57014) firing on a statement that holds the
+#: lock and still does not finish. Same retry shape, counted `stats.store_slow`, and its
+#: BudgetUnavailable says "store slow (statement_timeout)", never "hung transaction".
 LOCK_FLOOR_S = 2.0
 #: Postgres `lock_timeout = 0` means NO timeout, so a remaining wait of ~0 still gets this floor.
 _MIN_LOCK_MS = 50
@@ -94,6 +99,12 @@ _MIN_LOCK_MS = 50
 _LOCK_TIMEOUT, _QUERY_CANCELED = "55P03", "57014"
 #: `statement_timeout` = the lock budget plus this (the statement itself, once it holds the lock).
 _STMT_SLACK_MS = 1000
+#: THE TRUE OVERRUN BOUND. `acquire` returns or raises within `max_wait + MAX_OVERRUN_S` of DB time:
+#: the last attempt inside max_wait may start with ~0 left and still run its 50ms lock floor plus one
+#: statement slack, then the LOCK_FLOOR_S attempt runs its own slack. = 2 + 2x1 + 0.05 = 4.05s
+#: (max_wait 1 -> ~5s on a slow DB; Tradier's max_wait 20 -> ~24s). Connection checkout / connect time
+#: is NOT inside it -- bound that on the session factory (pool_timeout, connect timeout).
+MAX_OVERRUN_S = LOCK_FLOOR_S + 2 * _STMT_SLACK_MS / 1000 + _MIN_LOCK_MS / 1000
 #: A flush has no caller-side max_wait; it waits this long for the row lock, then counts a failure.
 _FLUSH_LOCK_S = 2.0
 _TIMEOUTS = text("SELECT set_config('lock_timeout', :lock, true), set_config('statement_timeout', :stmt, true)")
@@ -146,8 +157,13 @@ class BudgetUnavailable(RuntimeError):
         self.key = key
 
 
-class _LockContended(Exception):
-    """Internal: an attempt's own lock / statement bound fired (contention, see LOCK_FLOOR_S)."""
+class _BoundFired(Exception):
+    """Internal: one of an attempt's OWN bounds fired -- `kind` "lock" (55P03, contention) or "slow"
+    (57014 from our statement_timeout, a slow store). See LOCK_FLOOR_S."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(kind)
+        self.kind = kind
 
 
 def _sqlstate(exc: BaseException) -> str | None:
@@ -180,6 +196,7 @@ class BudgetStats:
     flush_failed: int = 0
     flush_stale: int = 0
     lock_contended: int = 0
+    store_slow: int = 0
     config_conflict: int = 0
 
     def series(self, key: str) -> list[tuple[str, dict[str, str], float]]:
@@ -304,17 +321,24 @@ class PgWindowBudget:
             budget_s = LOCK_FLOOR_S if last else remaining
             try:
                 row = await self._attempt(weight, budget_s)
-            except _LockContended:
-                self.stats.lock_contended += 1
+            except _BoundFired as fired:
+                slow = fired.kind == "slow"
+                if slow:
+                    self.stats.store_slow += 1
+                else:
+                    self.stats.lock_contended += 1
                 contended = True
                 if not last:
-                    continue  # contention inside max_wait: re-ask
+                    continue  # contention (or one slow statement) inside max_wait: re-ask
                 self.stats.unavailable += 1
-                log.warning("budget_lock_stuck key=%s held_past_s=%.1f", self._key, self._max_wait + LOCK_FLOOR_S)
-                raise BudgetUnavailable(
-                    self._key,
-                    f"row lock held past max_wait {self._max_wait:g}s + {LOCK_FLOOR_S:g}s -- a hung transaction, not a queue",
-                ) from None
+                bound = f"max_wait {self._max_wait:g}s + {LOCK_FLOOR_S:g}s"
+                if slow:
+                    log.warning("budget_store_slow key=%s reason=statement_timeout", self._key)
+                    why = f"store slow (statement_timeout): the statement held the row and did not finish past {bound}"
+                else:
+                    log.warning("budget_lock_stuck key=%s held_past_s=%.1f", self._key, self._max_wait + LOCK_FLOOR_S)
+                    why = f"row lock held past {bound} -- a hung transaction, not a queue"
+                raise BudgetUnavailable(self._key, why) from None
             if row is None:  # lost the create race: the row exists now, ask again
                 conflicts += 1
                 if conflicts > _CONFLICT_RETRIES:
@@ -365,8 +389,9 @@ class PgWindowBudget:
                 rows = (await s.execute(self._acquire_sql, params)).all()
                 await s.commit()
         except Exception as exc:
-            if self._ours(exc, remaining_s, time.monotonic() - started):
-                raise _LockContended from exc
+            kind = self._bound_fired(exc, remaining_s, time.monotonic() - started)
+            if kind is not None:
+                raise _BoundFired(kind) from exc
             self.stats.unavailable += 1
             log.warning("budget_unavailable key=%s err=%s", self._key, type(exc).__name__)
             raise BudgetUnavailable(self._key, f"{type(exc).__name__}: {exc}") from exc
@@ -376,14 +401,15 @@ class PgWindowBudget:
         return bool(g), float(w), pc, pp
 
     @staticmethod
-    def _ours(exc: BaseException, budget_s: float, took_s: float) -> bool:
-        """Did one of OUR bounds fire? 55P03 is always ours (only `_bound` sets lock_timeout here);
-        57014 only when the attempt ran at least as long as our statement bound."""
+    def _bound_fired(exc: BaseException, budget_s: float, took_s: float) -> str | None:
+        """Which of OUR bounds fired: "lock" (55P03 -- only `_bound` sets lock_timeout here), "slow"
+        (57014 when the attempt ran at least as long as our statement bound), else None (an
+        operator's early cancel, a connection error: unavailable)."""
         state = _sqlstate(exc)
         if state == _LOCK_TIMEOUT:
-            return True
+            return "lock"
         stmt_s = (max(int(budget_s * 1000), _MIN_LOCK_MS) + _STMT_SLACK_MS) / 1000
-        return state == _QUERY_CANCELED and took_s >= 0.9 * stmt_s
+        return "slow" if state == _QUERY_CANCELED and took_s >= 0.9 * stmt_s else None
 
     def _check_config(self, prior_cap: int | None, prior_period: int | None) -> None:
         if prior_cap is None:

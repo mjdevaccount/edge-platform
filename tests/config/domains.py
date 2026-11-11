@@ -48,8 +48,8 @@ class _Exempt(Domain):
     """Matches SECRET_LOOKING by name, is not a credential, and says why (the declared exemption)."""
 
     domain = "t_exempt"
-    vendor_token_kind: str = knob("bearer", cls=KnobClass.TOPOLOGY, env="T_VENDOR_TOKEN_KIND", doc="Token scheme.",
-                                  not_secret="names the scheme (bearer/basic), never carries the token")  # fmt: skip
+    sort_key: str = knob("ts", cls=KnobClass.TOPOLOGY, env="T_SORT_KEY", doc="Sort column.",
+                                  not_secret="names the column results sort by, never a credential")  # fmt: skip
 
 
 EXEMPT = [_Exempt]

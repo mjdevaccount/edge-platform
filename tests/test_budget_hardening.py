@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from edge_platform.budget import (
     LOCK_FLOOR_S,
+    MAX_OVERRUN_S,
     RESET_HORIZON_PERIODS,
     BudgetExhausted,
     BudgetUnavailable,
@@ -278,14 +279,91 @@ class _Wrapped(Exception):
 
 
 @pytest.mark.parametrize(
-    ("exc", "took_s", "ours"),
+    ("exc", "took_s", "kind"),
     [
-        (_Wrapped(_PgErr("55P03")), 0.06, True),  # lock_not_available: only our bound sets it
-        (_Wrapped(_PgErr("57014")), 3.0, True),  # our statement_timeout fired (budget 2s + 1s slack)
-        (_Wrapped(_PgErr("57014")), 0.1, False),  # canceled early: an operator's pg_cancel_backend
-        (_Wrapped(_PgErr("08006")), 3.0, False),  # connection failure: unavailable
-        (RuntimeError("no sqlstate"), 3.0, False),
+        (_Wrapped(_PgErr("55P03")), 0.06, "lock"),  # lock_not_available: only our bound sets it
+        (_Wrapped(_PgErr("57014")), 3.0, "slow"),  # our statement_timeout fired (budget 2s + 1s slack)
+        (_Wrapped(_PgErr("57014")), 0.1, None),  # canceled early: an operator's pg_cancel_backend
+        (_Wrapped(_PgErr("08006")), 3.0, None),  # connection failure: unavailable
+        (RuntimeError("no sqlstate"), 3.0, None),
     ],
 )
-def test_only_our_own_bound_counts_as_contention(exc: BaseException, took_s: float, ours: bool) -> None:
-    assert PgWindowBudget._ours(exc, 2.0, took_s) is ours
+def test_only_our_own_bound_counts_as_contention(exc: BaseException, took_s: float, kind: str | None) -> None:
+    assert PgWindowBudget._bound_fired(exc, 2.0, took_s) == kind
+
+
+# --- round 3: lock time spends max_wait; a slow store is not a hung lock; the true bound -----------
+
+
+def test_lock_wait_spends_max_wait_so_a_late_refusal_never_sleeps() -> None:
+    """A held lock eats most of max_wait (1.2s of 1.5s), then the row refuses with ~0.75s to the
+    window end. Lock time counts: 1.2 + 0.75 > 1.5 -> BudgetExhausted, no sleep. With the lock time
+    ignored (`elapsed = waited`), 0 + 0.75 <= 1.5 and it slept past max_wait."""
+
+    async def go():
+        async with scratch_schema() as (maker, schema):
+            t = await _table(maker, schema)
+            naps: list[float] = []
+
+            async def sleep(s: float) -> None:
+                naps.append(s)
+                await asyncio.sleep(s)
+
+            b = PgWindowBudget(maker, t, "v:prod", Window(1, 2), max_wait=1.5, sleep=sleep)
+            await b.acquire()  # the window is full until ~2s from now
+            async with maker() as holder:
+                await holder.execute(text(f"SELECT 1 FROM {t} WHERE key='v:prod' FOR UPDATE"))
+
+                async def release() -> None:
+                    await asyncio.sleep(1.2)
+                    await holder.rollback()
+
+                rel = asyncio.create_task(release())
+                try:
+                    out: object = await b.acquire()
+                except BudgetExhausted as exc:
+                    out = exc
+                await rel
+            return out, naps, b.stats
+
+    out, naps, stats = asyncio.run(go())
+    assert isinstance(out, BudgetExhausted) and naps == [] and stats.unavailable == 0
+    assert 0 < out.next_in_s < 1.0 and out.waited_s == 0.0
+
+
+def test_a_slow_store_is_named_slow_not_a_hung_lock() -> None:
+    """Round-3 repro: a BEFORE UPDATE trigger sleeps 30s, so our statement_timeout (57014) fires while
+    the statement HOLDS the row. That is a slow store: `store_slow`, not `lock_contended`, and the
+    reason says statement_timeout -- never "hung transaction". It ends inside max_wait + MAX_OVERRUN_S."""
+
+    async def go():
+        async with scratch_schema() as (maker, schema):
+            t = await _table(maker, schema)
+            async with maker() as s:
+                await s.execute(
+                    text(
+                        f"CREATE FUNCTION {schema}.slow() RETURNS trigger LANGUAGE plpgsql AS "
+                        "$$ BEGIN PERFORM pg_sleep(30); RETURN NEW; END $$"
+                    )
+                )
+                await s.commit()
+            b = PgWindowBudget(maker, t, "v:prod", Window(100, 60), max_wait=1.0)
+            await b.acquire()
+            async with maker() as s:
+                await s.execute(
+                    text(f"CREATE TRIGGER slow BEFORE UPDATE ON {t} FOR EACH ROW EXECUTE FUNCTION {schema}.slow()")
+                )
+                await s.commit()
+            t0 = time.monotonic()
+            try:
+                out: object = await asyncio.wait_for(b.acquire(), 1.0 + MAX_OVERRUN_S + 5)
+            except BudgetUnavailable as exc:
+                out = exc
+            return out, time.monotonic() - t0, b.stats
+
+    out, elapsed, stats = asyncio.run(go())
+    assert isinstance(out, BudgetUnavailable) and "store slow (statement_timeout)" in str(out)
+    assert "hung transaction" not in str(out)
+    assert stats.store_slow == 2 and stats.lock_contended == 0 and stats.unavailable == 1
+    assert elapsed <= 1.0 + MAX_OVERRUN_S + 0.5  # the documented true bound
+    assert MAX_OVERRUN_S == pytest.approx(LOCK_FLOOR_S + 2.0 + 0.05)

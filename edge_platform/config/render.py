@@ -14,19 +14,25 @@ from pydantic import SecretBytes, SecretStr, TypeAdapter
 
 from edge_platform.stamp import fingerprint as _fp
 
-from .knobs import FINGERPRINTED, MASK, ConfigError, Domain, KnobClass, Source, is_snake, meta, runtime_values
+from .knobs import (
+    FINGERPRINTED,
+    MASK,
+    SECRET_AMBIGUOUS,
+    SECRET_NAMED,
+    ConfigError,
+    Domain,
+    KnobClass,
+    Source,
+    is_snake,
+    meta,
+    runtime_values,
+)
 
 log = logging.getLogger("edge_platform.config")
 
-#: names that look like credentials; such a knob must be classed SECRET (invariant 10), or declare
-#: `knob(not_secret="<why>")`. `KEY` as the final word (LITELLM_MASTER_KEY, LANGFUSE_ENCRYPTION_KEY)
-#: except PUBLIC_KEY, `KEY_ID` (BACKUP_S3_ACCESS_KEY_ID), `AUTH` as the final word or a basic-auth /
-#: auth-token name (LANGFUSE_REDIS_AUTH, CADDY_BASIC_AUTH_PLAINTEXT) but NOT `AUTH_` as a prefix
-#: (TRADE_DATA_AUTH_MODE is a mode switch), and a connection string by name (DATABASE_URL, *_DSN).
-SECRET_LOOKING = re.compile(
-    r"(SECRET|TOKEN|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|PLAINTEXT|PRIVATE_KEY|API_KEY|KEY_ID"
-    r"|(?:^|_)AUTH$|BASIC_AUTH|AUTH_TOKEN|(?<!PUBLIC)_KEY$|^KEY$|DSN|DB_URL|DATABASE_URL)"
-)
+#: names that look like credentials (invariant 10): SECRET_NAMED (must be SECRET, no exemption) or
+#: SECRET_AMBIGUOUS (SECRET, or a declared `knob(not_secret="<why>")`). See knobs.py for each list.
+SECRET_LOOKING = re.compile(f"{SECRET_NAMED.pattern}|{SECRET_AMBIGUOUS.pattern}")
 #: `scheme://<userinfo>@` -- a credential carried INSIDE a value, whatever the knob is called
 _USERINFO = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*://)[^/@\s]+@")
 

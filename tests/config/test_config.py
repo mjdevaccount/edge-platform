@@ -294,28 +294,69 @@ def test_a_real_non_credential_name_lints_clean_and_boots(env: str) -> None:
 
 
 def test_not_secret_silences_the_name_finding_and_is_audited(capsys) -> None:
-    assert any("looks like a credential" in f for f in lint([_one("T_VENDOR_TOKEN_KIND", KnobClass.TOPOLOGY)]))
+    assert any("looks like a credential" in f for f in lint([_one("T_SORT_KEY", KnobClass.TOPOLOGY)]))
     assert lint(EXEMPT) == []
     assert exemptions(EXEMPT) == [
-        "t_exempt.vendor_token_kind: T_VENDOR_TOKEN_KIND -- names the scheme (bearer/basic), never carries the token"
+        "t_exempt.sort_key: T_SORT_KEY -- names the column results sort by, never a credential"
     ]
-    assert "(not secret: names the scheme" in catalog(EXEMPT)
+    assert "(not secret: names the column" in catalog(EXEMPT)
     assert cli(["lint", "tests.config.domains:EXEMPT"]) == 0
-    assert "exempt (not_secret): t_exempt.vendor_token_kind" in capsys.readouterr().out
+    assert "exempt (not_secret): t_exempt.sort_key" in capsys.readouterr().out
 
 
 def test_an_exemption_needs_a_reason_a_non_secret_class_and_a_name_that_needs_it() -> None:
     for bad in ("", "   "):
         with pytest.raises(ValueError, match="not_secret needs a reason"):
-            _one("T_VENDOR_TOKEN_KIND", KnobClass.TOPOLOGY, not_secret=bad)
+            _one("T_SORT_KEY", KnobClass.TOPOLOGY, not_secret=bad)
     with pytest.raises(ValueError, match="pick one"):
         knob("x", cls=KnobClass.SECRET, env="T_VENDOR_TOKEN", doc="d.", not_secret="why")
     stale = _one("T_RISK_HOST", KnobClass.TOPOLOGY, not_secret="never looked like one")
     assert any("does not look like a credential -- drop it" in f for f in lint([stale]))
 
 
+@pytest.mark.parametrize(
+    "env",
+    [
+        "LITELLM_MASTER_KEY",  # round-3 repro: exempted with any reason, its value printed at boot
+        "BACKUP_S3_ACCESS_KEY_ID",
+        "LANGFUSE_ENCRYPTION_KEY",
+        "T_VENDOR_TOKEN",
+        "T_VENDOR_API_KEY",
+        "T_DB_PASSWORD",
+        "T_SMTP_PASS",
+        "T_DB_PWD",
+        "T_CADDY_BASIC_AUTH_PLAINTEXT",
+        "T_CLIENT_SECRET",
+        "T_PG_DSN",
+        "DATABASE_URL",
+    ],
+)
+def test_not_secret_cannot_exempt_a_name_that_is_unambiguously_a_credential(env: str) -> None:
+    with pytest.raises(ValueError, match="not_secret cannot exempt it"):
+        _one(env, KnobClass.TOPOLOGY, not_secret="trust me")
+
+
+@pytest.mark.parametrize(
+    "env",
+    ["T_SORT_KEY", "T_KMS_KEY_ID", "LANGFUSE_REDIS_AUTH", "T_SESSION_COOKIE", "T_WEBHOOK_HMAC", "T_CREDENTIALS_PATH"],
+)
+def test_not_secret_may_exempt_an_ambiguous_name(env: str) -> None:
+    assert any("looks like a credential" in f for f in lint([_one(env, KnobClass.TOPOLOGY)]))  # fires bare
+    assert lint([_one(env, KnobClass.TOPOLOGY, not_secret="this one is not a credential")]) == []
+
+
+@pytest.mark.parametrize("env", ["T_SMTP_PASS", "T_DB_PWD", "T_SESSION_COOKIE", "T_WEBHOOK_HMAC"])
+def test_round_3_names_must_fire(env: str) -> None:
+    assert any(f"{env} looks like a credential" in f for f in lint([_one(env, KnobClass.TOPOLOGY)]))
+
+
+@pytest.mark.parametrize("env", ["T_BYPASS_MODE", "T_PASSAGE_COUNT", "T_COMPASS_HEADING", "T_PWDIR"])
+def test_round_3_patterns_are_anchored(env: str) -> None:
+    assert lint([_one(env, KnobClass.TOPOLOGY)]) == []
+
+
 def test_url_userinfo_is_redacted_even_on_an_exempt_knob(caplog, monkeypatch) -> None:
-    monkeypatch.setenv("T_VENDOR_TOKEN_KIND", "https://u:pw-canary-77@vendor.example/x")
+    monkeypatch.setenv("T_SORT_KEY", "https://u:pw-canary-77@vendor.example/x")
     with caplog.at_level(logging.INFO, logger="edge_platform.config"):
         load_all(EXEMPT)
     assert "pw-canary-77" not in caplog.text and "https://***@vendor.example/x" in caplog.text

@@ -18,6 +18,17 @@ MASK = "***"
 _SNAKE = re.compile(r"^[a-z][a-z0-9_]*$")
 _ENV = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
+#: Names that ARE credentials. A knob so named must be classed SECRET -- `not_secret` cannot exempt
+#: it (an exemption with any reason would print LITELLM_MASTER_KEY in the boot log).
+SECRET_NAMED = re.compile(
+    r"(SECRET|TOKEN|PASSWORD|PASSWD|PASSPHRASE|_PASS$|_PWD$|PLAINTEXT|PRIVATE_KEY|API_KEY|MASTER_KEY"
+    r"|ACCESS_KEY|ENCRYPTION_KEY|SIGNING_KEY|DSN|DB_URL|DATABASE_URL)"
+)
+#: Names that USUALLY are: `KEY` as the final word (except PUBLIC_KEY), `KEY_ID`, `AUTH` as the final
+#: word or BASIC_AUTH (not an `AUTH_` prefix: TRADE_DATA_AUTH_MODE is a mode switch), CREDENTIAL,
+#: COOKIE, HMAC. These must be SECRET or declare `knob(not_secret="<why>")`.
+SECRET_AMBIGUOUS = re.compile(r"((?<!PUBLIC)_KEY$|^KEY$|KEY_ID|(?:^|_)AUTH$|BASIC_AUTH|CREDENTIAL|COOKIE|HMAC)")
+
 
 class KnobClass(StrEnum):
     SECRET = "secret"
@@ -81,6 +92,11 @@ def knob(
             raise ValueError(f"knob {env}: not_secret needs a reason (why this name is not a credential)")
         if cls is KnobClass.SECRET:
             raise ValueError(f"knob {env}: classed SECRET and declared not_secret -- pick one")
+        if SECRET_NAMED.search(env):
+            raise ValueError(
+                f"knob {env}: the name says it IS a credential -- not_secret cannot exempt it; class it "
+                "SECRET (or rename it if it truly is not one)"
+            )
     meta: dict[str, Any] = {"cls": cls.value, "doc": doc.strip(), "env": env, "unit": unit, "affects": list(affects)}
     if on_unreadable is not _UNSET:
         meta["on_unreadable"] = on_unreadable
