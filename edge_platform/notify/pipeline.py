@@ -47,6 +47,7 @@ from typing import Protocol
 from edge_platform.fence.sessions import ClockBlind
 
 from .local import LocalLedger
+from .policy import TIERS
 from .types import Channel, Delivery, Notice, Outcome, delivered_for
 
 log = logging.getLogger("edge_platform.notify.pipeline")
@@ -79,8 +80,14 @@ class Ledger(Protocol):
 
 
 def default_tier_for(severity: str, tier: str | None) -> str:
-    """The explicit tier, else p3. A consumer with a legacy severity vocabulary passes its own map."""
-    return tier or "p3"
+    """The explicit tier, or ValueError (v0.11). An unknown or missing tier is INVALID, never a guess
+    at p3 (fence v0.5.1 fixed the same class: unknown tier = invalid). A consumer with a severity
+    vocabulary passes its own `tier_for` map; whatever it returns is checked against TIERS too."""
+    if tier is None:
+        raise ValueError(f"notice has no tier and severity {severity!r} maps to none -- pass tier= or a tier_for map")
+    if tier not in TIERS:
+        raise ValueError(f"unknown tier {tier!r} (known: {TIERS})")
+    return tier
 
 
 def _utcnow() -> dt.datetime:
@@ -203,6 +210,8 @@ class Notifier:
             tx = self._resolve_transport(transport)
             led = self._resolve_ledger(ledger)
             tier = self.tier_for(notice.severity, notice.tier)
+            if tier not in TIERS:  # a consumer map's typo is a FAILED push, never an unbudgeted tier
+                raise ValueError(f"tier_for returned unknown tier {tier!r} (known: {TIERS})")
             disabled = tx.disabled()
             now = now or self._now()
         except Exception as exc:

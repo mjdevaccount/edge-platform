@@ -66,3 +66,24 @@ def test_git_sha_reads_the_variable_the_caller_names(monkeypatch) -> None:
 def test_git_sha_without_a_variable_name_refuses() -> None:
     with pytest.raises(ValueError, match="environment variable"):
         stamp.git_sha("")
+
+
+def test_fingerprint_refuses_a_type_it_cannot_hash_stably() -> None:
+    """v0.11 fix-now: `default=str` hashed ANY object by its str() (a set's iteration order, a repr
+    with an address). Must-fire both ways: an unknown type raises TypeError; the str-stable types it
+    already carried hash byte-identically to `str(v)` (the continuity law), so no persisted stamp moves."""
+    import decimal
+    import json
+    import uuid
+
+    class Opaque:
+        pass
+
+    for bad in ({1, 2}, Opaque(), b"bytes", frozenset({"a"})):
+        with pytest.raises(TypeError, match="cannot hash"):
+            stamp.fingerprint({"v": bad})
+    d, u = decimal.Decimal("1.50"), uuid.UUID("12345678-1234-5678-1234-567812345678")
+    ts = dt.datetime(2026, 11, 6, 14, 32, 7, tzinfo=dt.UTC)
+    for ok in (ts, ts.date(), ts.time(), d, u):
+        legacy = json.dumps({"v": ok}, sort_keys=True, separators=(",", ":"), default=str)
+        assert stamp.fingerprint({"v": ok}) == hashlib.sha256(legacy.encode()).hexdigest()[:16]

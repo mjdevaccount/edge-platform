@@ -21,7 +21,7 @@ run = asyncio.run
 
 
 def _n(ch: Channel, key: str = "k") -> Notice:
-    return Notice(ch, key=key, title="T", body="B")
+    return Notice(ch, key=key, title="T", body="B", tier="p3")
 
 
 class _StringTransport(RecordingTransport):
@@ -69,7 +69,7 @@ def test_a_raising_local_fallback_fails_open() -> None:
     tx = RecordingTransport()
     n = Notifier(transport=tx, ledger=MemoryLedger(fail_admit=True), local=BrokenLocal(),  # type: ignore[arg-type]
                  on_degraded=degraded.append)  # fmt: skip
-    ch = Channel("loc", dedup=Dedup.once(), budget=Budget(1, "et_iso_week"), on_ledger_down="local")
+    ch = Channel("loc", dedup=Dedup.once(), budget=Budget(1, "iso_week", tz="America/New_York"), on_ledger_down="local")
     d = run(n.notify(_n(ch), now=NOW))
     assert d.outcome is Outcome.SENT and len(tx.sent) == 1 and d.recorded is False
     assert degraded == ["notify_ledger_unavailable", "notify_local_ledger_failed"]
@@ -82,7 +82,7 @@ def test_a_blind_clock_in_the_ledger_is_named_for_its_cause() -> None:
 
     degraded: list[str] = []
     d = run(Notifier(transport=RecordingTransport(), ledger=BlindLedger(), on_degraded=degraded.append)
-            .notify(_n(Channel("s", budget=Budget(1, "et_iso_week"))), now=NOW))  # fmt: skip
+            .notify(_n(Channel("s", budget=Budget(1, "iso_week", tz="America/New_York"))), now=NOW))  # fmt: skip
     assert d.outcome is Outcome.SENT and degraded == ["notify_clock_blind"]
 
 

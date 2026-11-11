@@ -11,7 +11,12 @@ for unchanged content reads as a config change that never happened and silently 
 historical cohort. Every function here is pinned bit-for-bit by tests/test_stamp.py on fixed inputs;
 a failing pin is fixed by finding what changed the serialization, NEVER by updating the literal.
 
-  fingerprint(obj, n=16)  sha256 over canonical JSON (sort_keys, compact separators, default=str).
+  fingerprint(obj, n=16)  sha256 over canonical JSON (sort_keys, compact separators). v0.11: a
+                          type JSON cannot carry is REFUSED (TypeError), except date / datetime /
+                          time / Decimal / UUID, which serialize as `str(v)` exactly as before (the
+                          continuity law). `default=str` hashed ANY object by its str() -- a set's
+                          order, an object's repr with an address -- so two equal configs could
+                          stamp differently. Canonicalize with `canon` first.
   sha(text, n=16)         sha256 over an already-canonical string, for callers that own their
                           canonicalization. Byte-identical to llm-ports' `prompts.sha` (the pack
                           content sha); not imported from it, because edge-platform sits BELOW
@@ -30,18 +35,35 @@ private wrapper -- it is stamped on years of rows and is nobody else's continuit
 from __future__ import annotations
 
 import datetime as dt
+import decimal
 import hashlib
 import json
 import os
 import pathlib
+import uuid
 from typing import Any
 
 __all__ = ["canon", "doc_sha", "fingerprint", "git_sha", "sha"]
 
 
+#: The non-JSON types whose `str()` is stable and was already what `default=str` hashed -- kept,
+#: byte-identical, so a persisted stamp over one of them does not move (the continuity law).
+_STR_STABLE = (dt.datetime, dt.date, dt.time, decimal.Decimal, uuid.UUID)
+
+
+def _refuse_unknown(v: Any) -> str:
+    if isinstance(v, _STR_STABLE):
+        return str(v)
+    raise TypeError(
+        f"fingerprint cannot hash a {type(v).__name__} -- its str() is not a stable identity; "
+        "convert it (stamp.canon, a sorted list, a plain dict) before stamping"
+    )
+
+
 def fingerprint(obj: Any, *, n: int = 16) -> str:
-    """sha256 hex over canonical JSON of `obj`, truncated to n chars."""
-    blob = json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str)
+    """sha256 hex over canonical JSON of `obj`, truncated to n chars. Refuses a type it cannot hash
+    stably (TypeError) -- see the module docstring."""
+    blob = json.dumps(obj, sort_keys=True, separators=(",", ":"), default=_refuse_unknown)
     return hashlib.sha256(blob.encode()).hexdigest()[:n]
 
 

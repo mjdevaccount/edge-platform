@@ -6,11 +6,15 @@ Lifted from trade-data `service/usecases/watchdog_runner.py` (M6 PL5). For each 
      is the CONSUMER's callable (an exchange calendar lives with the consumer, never here). A gate
      that RAISES is a plane that cannot fire, so the runner logs it, reports `on_degraded(
      "watchdog_market_gate_failed")` and evaluates as a session day: a gated probe run on a holiday
-     is noise, a plane that never runs is silence.
+     is noise, a plane that never runs is silence. A skipped spec reads IDLE, never OK (v0.11): a
+     never-run watchdog stores no row, and a stored verdict is reset to IDLE, not to a pass.
   2. PROBE: the spec's coroutine, inside a SAVEPOINT on the shared session -- one probe's SQL error
      must not abort the transaction its siblings and the state writes share (17 sweeps persisted
      nothing for 16 hours before this). A raising probe becomes UNKNOWN, its exception text is
-     PERSISTED (`last_error`), and it never pages as if the watched thing were down.
+     PERSISTED (`last_error`), and it never pages as if the watched thing were down. A watchdog
+     UNKNOWN for `unknown_after` consecutive sweeps (v0.11) reports `on_degraded(
+     "watchdog_probe_unknown:<id>")` on every recording sweep from then on -- a crashed detector
+     that stays crashed is a plane that cannot fire, and must not be silent.
   3. DEDUP (transition-only + re-alert, DB-backed): page when the status ENTERS the pageable set,
      or every `realert_h` while it stays there. The memory is the state store (`watch.state`), so
      it survives deploys -- the /tmp version re-paged every standing failure after every restart.
@@ -30,7 +34,10 @@ Lifted from trade-data `service/usecases/watchdog_runner.py` (M6 PL5). For each 
 TELEMETRY (every signal the trade-data runner emitted survives as an injected hook or a stdlib log):
 `sweep_scope()` wraps each sweep (trade-data: its work-timeline unit "watchdog_sweep");
 `on_degraded(reason)` gets `watchdog_page_failed` / `watchdog_investigate_failed` /
-`watchdog_market_gate_failed`; `metrics["probe_ms"]` per probe; `last_error` persisted; log events
+`watchdog_market_gate_failed` / `watchdog_probe_unknown:<id>`; `metrics["probe_ms"]` and
+`metrics["unknown_runs"]` per probe; `last_error` persisted; the sweep result's `blind` (every spec
+this sweep could not judge) and `stuck_unknown`, which `exit_code(result)` turns into the CLI
+contract 0 = clean / 1 = findings / 2 = did not finish looking; log events
 `watchdog_state_reaped`, `watchdog_contended_skip`, `watchdog_verdicts_stale` (warning),
 `watchdog probe failed`, `watchdog page failed`.
 
@@ -63,6 +70,42 @@ STALE_AFTER_S = 2 * 3600 + 15 * 60
 #: The off-session skip's detail: ONE string, so the stored row, the live sweep and the stored read
 #: cannot word the same verdict three ways.
 OFF_SESSION = "skipped — not a trading session"
+#: Consecutive UNKNOWN sweeps after which a watchdog's own failure is reported (`on_degraded`).
+UNKNOWN_AFTER = 3
+
+
+def exit_code(result: dict[str, Any]) -> int:
+    """The CLI contract for one sweep's (or one stored read's) result: 2 = did not finish looking,
+    1 = findings (WARN/DOWN), 0 = clean. "Did not finish looking" is ANY of: no results at all (an
+    empty registry is an import failure, never a clean plane), a `blind` id, any row whose status is
+    UNKNOWN, or any `stale` verdict (a stored read over a plane nothing has swept). A crashed
+    detector must never exit 0, and must not be confused with a finding."""
+    results = list(result.get("results") or ())
+    if not results or result.get("blind") or result.get("stale"):
+        return 2
+    if any(r.get("status") == Status.UNKNOWN.value for r in results):
+        return 2
+    failing = {s.value for s in FAILING}
+    return 1 if any(r.get("status") in failing for r in results) else 0
+
+
+def _unknown_runs(prior: dict[str, Any]) -> int:
+    """Consecutive UNKNOWN sweeps including this one. Kept in the stored metrics, so it survives a
+    deploy the way the dedup memory does."""
+    if prior.get("last_status") != Status.UNKNOWN.value:
+        return 1
+    try:
+        return int((prior.get("last_metrics") or {}).get("unknown_runs") or 1) + 1
+    except (TypeError, ValueError):
+        return 2  # stored before the counter existed: at least this one and the last
+
+
+def _stored_streak(metrics: Any) -> int:
+    """The UNKNOWN streak a stored row recorded (0 when it recorded none, or garbage)."""
+    try:
+        return int((metrics or {}).get("unknown_runs") or 0)
+    except (TypeError, ValueError, AttributeError):
+        return 0
 
 
 class StateStore(Protocol):
@@ -154,6 +197,7 @@ class WatchRunner:
     investigate       the optional transition hook (see the module docstring)
     sweep_scope       () -> async context manager wrapped around each sweep (a timeline unit)
     day_start         now -> the start of now's session day (default: midnight in now's zone)
+    unknown_after     consecutive UNKNOWN sweeps before `on_degraded("watchdog_probe_unknown:<id>")`
     """
 
     def __init__(
@@ -171,7 +215,10 @@ class WatchRunner:
         day_start: Callable[[dt.datetime], dt.datetime] = _midnight,
         realert_h: float = REALERT_H,
         stale_after_s: int = STALE_AFTER_S,
+        unknown_after: int = UNKNOWN_AFTER,
     ) -> None:
+        if unknown_after < 1:
+            raise ValueError("unknown_after must be >= 1")
         self.registry = registry
         self._store = store
         self._session_day = session_day
@@ -184,6 +231,7 @@ class WatchRunner:
         self._day_start = day_start
         self.realert_h = realert_h
         self.stale_after_s = stale_after_s
+        self.unknown_after = unknown_after
 
     # -- the hooks, each guarded ------------------------------------------------------------------
     def _degraded(self, reason: str) -> None:
@@ -269,6 +317,8 @@ class WatchRunner:
 
         results: list[dict[str, Any]] = []
         paged: list[str] = []
+        blind: list[str] = []  # specs this sweep could not judge (UNKNOWN): exit 2, "did not finish looking"
+        stuck: list[str] = []  # ...and UNKNOWN for `unknown_after` sweeps running
         for spec in specs:
             prior = stored.get(spec.id) or {}
             if spec.id in contended:
@@ -280,12 +330,14 @@ class WatchRunner:
                 results.append({**row, "contended": True})
                 continue
             if spec.market_gated and not session_day:
-                results.append(_skipped_row(spec, prior, Status.OK.value, OFF_SESSION))
+                results.append(_skipped_row(spec, prior, Status.IDLE.value, OFF_SESSION))
                 # THE STORED ROW MUST NOT OUTLIVE THE VERDICT: a watchdog that went DOWN and was
-                # then gated kept 'down' stored while the listing said ok/skipped -- two truths.
-                if notify and (prior.get("last_status") or "ok") != "ok":
-                    await repo.record(spec.id, status="ok", transitioned=True, paged=False, now=now,
-                                      error=None, detail=OFF_SESSION, metrics={})  # fmt: skip
+                # then gated kept 'down' stored while the listing said ok/skipped -- two truths. It
+                # resets to IDLE, never OK (v0.11): a skip is not a pass. A NEVER-run spec stores no
+                # row at all (None), so "not yet evaluated" stays readable as exactly that.
+                if notify and prior and prior.get("last_status") != Status.IDLE.value:
+                    await repo.record(spec.id, status=Status.IDLE.value, transitioned=True, paged=False,
+                                      now=now, error=None, detail=OFF_SESSION, metrics={})  # fmt: skip
                 continue
             t0 = time.monotonic()
             probe_error: str | None = None
@@ -300,6 +352,13 @@ class WatchRunner:
                 probe_error = f"{type(exc).__name__}: {exc}"[:500]
                 probe = Probe(Status.UNKNOWN, f"probe raised: {exc!r}")
             metrics = {**(probe.metrics or {}), "probe_ms": int((time.monotonic() - t0) * 1000)}
+            if probe.status is Status.UNKNOWN:
+                metrics["unknown_runs"] = streak = _unknown_runs(prior)
+                blind.append(spec.id)
+                if streak >= self.unknown_after:
+                    stuck.append(spec.id)
+                    if notify:  # a read-only re-probe must not double-report the plane's telemetry
+                        self._degraded(f"watchdog_probe_unknown:{spec.id}")
             page, transitioned = should_page(stored.get(spec.id), probe.status, now, realert_h=self.realert_h)
             page = page and not spec.observe_only
             pushed = False
@@ -332,7 +391,7 @@ class WatchRunner:
             })  # fmt: skip
         return {
             "now": now.isoformat(), "session_day": session_day, "results": results, "paged": paged,
-            "contended": sorted(contended),
+            "contended": sorted(contended), "blind": blind, "stuck_unknown": stuck,
         }  # fmt: skip
 
     async def run_subset(self, session: Any, ids: list[str], *, notify: bool = True) -> dict[str, Any]:
@@ -365,7 +424,7 @@ class WatchRunner:
         for spec in specs:
             prior = stored.get(spec.id) or {}
             if spec.market_gated and not session_day:
-                row = _skipped_row(spec, prior, Status.OK.value, OFF_SESSION)
+                row = _skipped_row(spec, prior, Status.IDLE.value, OFF_SESSION)
                 results.append({**row, "stale": False, "age_s": None})
                 continue
             status = prior.get("last_status") or Status.UNKNOWN.value
@@ -397,8 +456,12 @@ class WatchRunner:
         stale = [r["id"] for r in results if r["stale"]]
         if stale:
             log.warning("watchdog_verdicts_stale ids=%s stale_after_s=%s", stale, self.stale_after_s)
+        # The same two lists the live sweep returns, derived from the stored rows -- hard-coding them
+        # empty made `exit_code(read_stored(...))` 0 on a plane whose every probe had crashed.
+        blind = [r["id"] for r in results if r["status"] == Status.UNKNOWN.value]
+        stuck = [r["id"] for r in results if r["id"] in blind and _stored_streak(r["metrics"]) >= self.unknown_after]
         return {
             "now": now.isoformat(), "session_day": session_day, "source": "stored",
             "stale_after_s": self.stale_after_s, "stale": stale, "results": results, "paged": [],
-            "contended": [],
+            "contended": [], "blind": blind, "stuck_unknown": stuck,
         }  # fmt: skip

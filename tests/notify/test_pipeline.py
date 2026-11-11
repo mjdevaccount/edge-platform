@@ -9,9 +9,10 @@ import datetime as dt
 
 import pytest
 
+from edge_platform.fence.sessions import ClockBlind
 from edge_platform.notify import types as nt
 from edge_platform.notify.local import LocalLedger
-from edge_platform.notify.pipeline import Notifier
+from edge_platform.notify.pipeline import Notifier, default_tier_for
 from edge_platform.notify.types import Budget, Channel, Dedup, Notice, Outcome
 
 from . import ledger_contract as contract
@@ -140,12 +141,29 @@ def test_tier_is_resolved_for_the_record_by_the_consumer_s_map() -> None:
     assert [r["tier"] for r in led.rows] == ["p3", "p1", "p1"]
 
 
-def test_the_library_default_tier_is_the_explicit_one_else_p3() -> None:
-    led = MemoryLedger()
-    n = Notifier(transport=RecordingTransport(), ledger=led)
-    run(n.notify(_n(Channel("s"), severity="high"), now=NOW))
+def test_the_library_default_tier_is_the_explicit_one_and_a_missing_one_is_refused() -> None:
+    """v0.11 fix-now: an unknown/missing tier was silently p3. Must-fire both ways: the explicit tier
+    records; no tier -> ValueError at the map, which notify() turns into a FAILED, degraded delivery
+    (never raises) -- and nothing is published under a guessed tier."""
+    assert default_tier_for("high", "p2") == "p2"
+    with pytest.raises(ValueError, match="no tier"):
+        default_tier_for("high", None)
+    with pytest.raises(ValueError, match="unknown tier"):
+        default_tier_for("high", "p9")
+    led, tx, degraded = MemoryLedger(), RecordingTransport(), []
+    n = Notifier(transport=tx, ledger=led, on_degraded=degraded.append)
+    d = run(n.notify(_n(Channel("s"), severity="high"), now=NOW))
+    assert (d.outcome, d.delivered, d.recorded) == (Outcome.FAILED, False, False) and "no tier" in (d.detail or "")
+    assert tx.sent == [] and degraded == ["notify_failed:s"]
     run(n.notify(_n(Channel("s"), key="k2", tier="p2"), now=NOW))
-    assert [r["tier"] for r in led.rows] == ["p3", "p2"]
+    assert [r["tier"] for r in led.rows] == ["p2"] and len(tx.sent) == 1
+
+
+def test_a_consumer_map_returning_an_unknown_tier_fails_the_push() -> None:
+    tx, degraded = RecordingTransport(), []
+    n = Notifier(transport=tx, ledger=MemoryLedger(), tier_for=lambda s, t: "P2", on_degraded=degraded.append)
+    d = run(n.notify(_n(Channel("s")), now=NOW))
+    assert d.outcome is Outcome.FAILED and "unknown tier 'P2'" in (d.detail or "") and tx.sent == []
 
 
 def test_a_local_channel_keeps_its_policy_when_the_ledger_dies() -> None:
@@ -169,8 +187,10 @@ def test_a_raising_on_degraded_hook_never_escapes() -> None:
     def boom(reason):
         raise RuntimeError("telemetry down")
 
-    n = Notifier(transport=RecordingTransport(outcome=Outcome.FAILED), ledger=MemoryLedger(), on_degraded=boom)
-    assert run(n.notify(_n(Channel("s")), now=NOW)).outcome is Outcome.FAILED
+    tx = RecordingTransport(outcome=Outcome.FAILED)
+    n = Notifier(transport=tx, ledger=MemoryLedger(), on_degraded=boom)
+    assert run(n.notify(_n(Channel("s"), tier="p3"), now=NOW)).outcome is Outcome.FAILED
+    assert len(tx.sent) == 1  # it reached the transport: the FAILED is the transport's, not the tier map's
 
 
 def test_the_local_ledger_is_bounded() -> None:
@@ -239,9 +259,29 @@ def test_policy_values_are_validated() -> None:
         Channel("s", on_ledger_down="closed")
 
 
+def test_the_week_zone_is_the_consumer_s() -> None:
+    """v0.11 fix-now: `window_key` hard-coded US Eastern. The zone is now the Budget's, so the same
+    instant counts in different weeks for different consumers, and the library names none."""
+    at = dt.datetime(2026, 10, 26, 3, 0, tzinfo=dt.UTC)  # Sunday night in New York, Monday in UTC
+    assert nt.window_key(Budget(1, "iso_week", tz="America/New_York"), at).endswith("2026-W43")
+    assert nt.window_key(Budget(1, "iso_week", tz="UTC"), at).endswith("2026-W44")
+    with pytest.raises(ValueError, match="needs tz"):
+        Budget(1, "iso_week")
+    with pytest.raises(ValueError, match="takes no tz"):
+        Budget(1, "utc_day", tz="UTC")
+    with pytest.raises(ValueError, match="unknown budget window"):
+        Budget(1, "et_iso_week")  # the v0.10 name, gone with its hard-coded zone
+    with pytest.raises(ClockBlind, match="cannot resolve"):
+        nt.window_key(Budget(1, "iso_week", tz="Mars/Olympus_Mons"), at)
+
+
 def test_window_keys() -> None:
     assert nt.window_key(Budget(1), dt.datetime(2026, 10, 23, 23, 59, tzinfo=dt.UTC)) == "utc-day:2026-10-23"
     assert (
-        nt.window_key(Budget(1, "et_iso_week"), dt.datetime(2026, 10, 26, 3, 59, tzinfo=dt.UTC)) == "et-week:2026-W43"
+        nt.window_key(Budget(1, "iso_week", tz="America/New_York"), dt.datetime(2026, 10, 26, 3, 59, tzinfo=dt.UTC))
+        == "iso-week:America/New_York:2026-W43"
     )
-    assert nt.window_key(Budget(1, "et_iso_week"), dt.datetime(2026, 10, 26, 4, 0, tzinfo=dt.UTC)) == "et-week:2026-W44"
+    assert (
+        nt.window_key(Budget(1, "iso_week", tz="America/New_York"), dt.datetime(2026, 10, 26, 4, 0, tzinfo=dt.UTC))
+        == "iso-week:America/New_York:2026-W44"
+    )

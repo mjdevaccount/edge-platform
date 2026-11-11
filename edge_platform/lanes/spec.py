@@ -14,7 +14,15 @@ registered. An empty list refuses every reference to it: an unknown name is a fi
 A consumer extends the core by subclassing (trade-data adds its rights tier, sighting slugs, rag
 sources) and its subclass's `__post_init__` calls `super().__post_init__()`.
 
-No DB, no clock, no I/O. Stdlib only.
+v0.11 (M6 PL9): ONE clock model. `market_gated: bool` is gone -- it said a clock existed, not
+which, and nothing in the package consumed it. A lane names its clock (`clock="wall"` or a name the
+consumer registered with `freshness.register_clock`) and declares `due_h`, its silence limit in
+THAT clock's hours; a lane on any clock but wall must declare `due_h` (the 36h floor is a wall-clock
+idea). Registration refuses a clock nobody registered, and refuses a JUDGED lane (a freshness probe
+and a limit, something schedules it) that has no run ledger -- `work_unit` or `heartbeat` -- unless
+it is `transport="computed"`: STOPPED needs a ledger, or a dead scheduler reads as frozen output.
+
+No DB, no I/O. Stdlib only.
 """
 
 from __future__ import annotations
@@ -24,6 +32,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from edge_platform.registry import Registry
+
+from .freshness import WALL, get_clock
 
 KINDS: tuple[str, ...] = ("content", "data")
 #: How the bytes arrive. `computed` = derived from a library or another table with no external call;
@@ -46,6 +56,7 @@ _RETIRED_RX = re.compile(r"^\d{4}-\d{2}-\d{2} \S.*$")  # "<date> <PR or reason>"
 #: module, never input, and this is the whole alphabet it may use -- no statement separator, no
 #: comment opener, nothing that reaches past one predicate.
 _WHERE_RX = re.compile(r"^[A-Za-z_0-9 .'=<>!%()]+$")
+_REPO_RX = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 
 @dataclass(frozen=True)
@@ -58,8 +69,11 @@ class LaneSpec:
                      test of a producer is whether its OUTPUT moved
     freshness_where  a predicate (a literal, never input) scoping the probe to THIS lane's rows of a
                      shared table -- without it a shared table's freshness is some other writer's
-    cadence_h        how often a healthy lane moves that column, sized so a Monday holiday does not trip
-                     it; None = event-driven, NEVER judged stale (a permanent warn carries nothing)
+    cadence_h        how often it is SCHEDULED, in `clock` hours; None = event-driven
+    due_h            its silence limit in `clock` hours (> cadence_h). None = the wall rule
+                     `freshness.stale_limit_h(cadence_h)`; REQUIRED on any clock but wall
+    clock            the name of a registered `freshness.Clock` ("wall" by default) every age of this
+                     lane is counted on -- a session clock adds no hours overnight
     raw_dataset      the dlt raw schema it lands in (raw_<name>), or None for a direct writer
     producers        work-market keys (feature.action) whose worklist comes from this lane
     queues           queues it FILLS
@@ -71,7 +85,8 @@ class LaneSpec:
     work_unit        the run-ledger unit name its runs record under; declaring it puts the lane on the
                      connectivity verdict (RUN vs OUTPUT, cadence_h as its max silence). Only where the
                      freshness column moves on EVERY healthy run, or it pages every quiet week
-    market_gated     the runner ticks only while the market is open, so weekend silence is health
+    repo             the owning repo when it is not the registrant's (a lane registered here, written
+                     by another codebase)
     home             the database its tables live in (`LaneVocab.homes`; None = the vocab's default)
     retired          "<date> <why>" when the writer was DELETED and its tables are frozen
     watched_by       outside watchers no field implies ("alert:<rule>", "sweep:<check>")
@@ -95,7 +110,9 @@ class LaneSpec:
     freshness_where: str | None = None
     enabled_default: bool = field(default=True)
     work_unit: str | None = None
-    market_gated: bool = False
+    due_h: float | None = None
+    clock: str = WALL.name
+    repo: str | None = None
     home: str | None = None
     retired: str | None = None
     watched_by: tuple[str, ...] = ()
@@ -103,6 +120,7 @@ class LaneSpec:
     def __post_init__(self) -> None:
         self._validate_identity()
         self._validate_tables()
+        self._validate_due()
         self._validate_schedules()
         self._validate_links()
         self._validate_retired()
@@ -134,11 +152,12 @@ class LaneSpec:
         if self.cadence_h is not None and self.cadence_h <= 0:
             raise ValueError(f"source {self.id!r}: cadence_h must be positive")
         if self.work_unit is not None and (
-            not _ID_RX.match(self.work_unit) or self.freshness is None or self.cadence_h is None
+            not _ID_RX.match(self.work_unit) or self.freshness is None or not self.limited
         ):
             raise ValueError(
                 f"source {self.id!r}: work_unit {self.work_unit!r} must be a snake_case run name on a source "
-                "with a freshness probe AND a cadence_h -- a run nothing can judge against an output age is not watched"
+                "with a freshness probe AND a cadence_h or due_h -- a run nothing can judge against an output "
+                "age is not watched"
             )
         if self.freshness_where is not None:
             w = self.freshness_where
@@ -147,6 +166,25 @@ class LaneSpec:
                     f"source {self.id!r}: freshness_where must be one predicate over the freshness table in the "
                     f"alphabet {_WHERE_RX.pattern!r} (no semicolon, no comments); got {w!r}"
                 )
+
+    def _validate_due(self) -> None:
+        if not isinstance(self.clock, str) or not _ID_RX.match(self.clock):
+            raise ValueError(f"source {self.id!r}: clock {self.clock!r} must be a snake_case clock name")
+        if self.due_h is not None:
+            if self.due_h <= 0:
+                raise ValueError(f"source {self.id!r}: due_h must be positive")
+            if self.cadence_h is not None and self.due_h <= self.cadence_h:
+                raise ValueError(
+                    f"source {self.id!r}: due_h {self.due_h:g} <= cadence_h {self.cadence_h:g} -- a lane would be "
+                    "late before it was next due"
+                )
+        if self.clock != WALL.name and self.due_h is None and self.retired is None:
+            raise ValueError(
+                f"source {self.id!r}: clock {self.clock!r} needs due_h -- the default limit (ttl x3, 36h floor) "
+                "is a WALL-clock rule and means nothing on a session clock"
+            )
+        if self.repo is not None and not _REPO_RX.match(self.repo):
+            raise ValueError(f"source {self.id!r}: repo {self.repo!r} must be a repository name")
 
     def _validate_schedules(self) -> None:
         if not self.schedules:
@@ -192,6 +230,16 @@ class LaneSpec:
             return None
         t = self.freshness[0]
         return f"{t} WHERE {self.freshness_where}" if self.freshness_where else t
+
+    @property
+    def limited(self) -> bool:
+        """It declares a silence limit (cadence_h or due_h): output age can be judged."""
+        return self.cadence_h is not None or self.due_h is not None
+
+    @property
+    def judged(self) -> bool:
+        """`judge` can reach a finding for it: live, scheduled, a freshness probe and a limit."""
+        return self.retired is None and self.freshness is not None and self.limited and self.schedules != ("manual",)
 
     @property
     def on_money_path(self) -> bool:
@@ -282,6 +330,19 @@ class LaneRegistry:
 
     def register(self, spec: LaneSpec) -> LaneSpec:
         self.vocab.check(spec)
+        try:
+            get_clock(spec.clock)
+        except LookupError:
+            raise ValueError(
+                f"source {spec.id!r}: clock {spec.clock!r} is not registered -- register_clock() it at the "
+                "composition root BEFORE the lanes (judge would otherwise raise at the first sweep)"
+            ) from None
+        if spec.judged and spec.work_unit is None and spec.heartbeat is None and spec.transport != "computed":
+            raise ValueError(
+                f"source {spec.id!r}: a judged lane needs a run ledger -- declare work_unit (its run-ledger unit) "
+                "or heartbeat (its heartbeat row), or transport='computed'. Without one STOPPED cannot be told "
+                "from STALE"
+            )
         return self._specs.add(spec)
 
     def registered(self) -> list[LaneSpec]:

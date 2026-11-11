@@ -13,7 +13,9 @@ Dedup, three shapes, all keyed (scope, key):
                     PASSED -- a suppressed duplicate does not extend the window).
 
 Budget: at most `cap` admitted notices per scope per window. A window is a pure function of the
-clock (`window_key`), so the ledger row it counts in is derivable, never stored state to drift.
+clock (`window_key`), so the ledger row it counts in is derivable, never stored state to drift. A
+weekly window is counted in the zone THE CONSUMER names (`Budget(cap, "iso_week", tz=...)`, v0.11):
+the library holds no zone of its own.
 """
 
 from __future__ import annotations
@@ -21,10 +23,13 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass, field
 from enum import StrEnum
+from zoneinfo import ZoneInfo
+
+from edge_platform.fence.sessions import ClockBlind
 
 from .policy import TIERS
 
-BUDGET_WINDOWS = ("utc_day", "et_iso_week")
+BUDGET_WINDOWS = ("utc_day", "iso_week")
 LEDGER_DOWN_MODES = ("open", "local")
 
 
@@ -81,25 +86,36 @@ class Dedup:
 
 @dataclass(frozen=True)
 class Budget:
+    """`per="utc_day"`, or `per="iso_week"` with `tz` an IANA zone name THE CONSUMER chooses (the
+    week a Sunday-night notice counts in depends on it). An iso_week without a zone is refused."""
+
     cap: int
-    per: str = "utc_day"  # "utc_day" | "et_iso_week"
+    per: str = "utc_day"  # "utc_day" | "iso_week"
+    tz: str | None = None  # required for "iso_week"; refused for "utc_day" (it would be ignored)
 
     def __post_init__(self) -> None:
         if self.cap < 0:
             raise ValueError("a budget cap cannot be negative")
         if self.per not in BUDGET_WINDOWS:
             raise ValueError(f"unknown budget window {self.per!r} (known: {BUDGET_WINDOWS})")
+        if self.per == "iso_week" and not (self.tz or "").strip():
+            raise ValueError("an iso_week budget needs tz= (an IANA zone name) -- the library holds no zone")
+        if self.per == "utc_day" and self.tz is not None:
+            raise ValueError("a utc_day budget takes no tz (it counts the UTC day)")
 
 
 def window_key(budget: Budget, now: dt.datetime) -> str:
-    """The budget row a notice at `now` counts against. `et_iso_week` is the ISO week in US Eastern
-    time -- the zone the policy's night window and the deploy fence already speak."""
+    """The budget row a notice at `now` counts against. `iso_week` is the ISO week in `budget.tz`. A
+    zone this host cannot resolve raises ClockBlind (the pipeline reports `notify_clock_blind`)
+    rather than counting a wrong week."""
     if budget.per == "utc_day":
         return f"utc-day:{now.astimezone(dt.UTC).date().isoformat()}"
-    from edge_platform.fence.sessions import et  # ClockBlind (no tzdata) rather than a wrong week
-
-    y, w, _ = now.astimezone(et()).isocalendar()
-    return f"et-week:{y}-W{w:02d}"
+    try:
+        zone = ZoneInfo(str(budget.tz))
+    except Exception as exc:
+        raise ClockBlind(f"this host cannot resolve the budget zone {budget.tz!r} ({type(exc).__name__})") from exc
+    y, w, _ = now.astimezone(zone).isocalendar()
+    return f"iso-week:{budget.tz}:{y}-W{w:02d}"
 
 
 @dataclass(frozen=True)

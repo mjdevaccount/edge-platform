@@ -68,7 +68,7 @@ def test_an_off_session_gated_spec_is_the_skip_row_and_not_stale() -> None:
     rig.session_day = False
     out = run(rig.runner.read_stored(object(), now=now(9, 40)))
     row = out["results"][0]
-    assert row["skipped"] is True and row["status"] == "ok" and row["stale"] is False and out["stale"] == []
+    assert row["skipped"] is True and row["status"] == "idle" and row["stale"] is False and out["stale"] == []
 
 
 def test_an_observe_only_down_never_says_it_would_page() -> None:
@@ -119,3 +119,35 @@ def test_an_injected_day_start_is_used() -> None:
     run(rig.runner.run(object(), now=dt.datetime(2026, 8, 7, 15, 10, tzinfo=ET)))
     out = run(rig.runner.read_stored(object(), now=dt.datetime(2026, 8, 10, 0, 5, tzinfo=ET)))
     assert out["stale"] == []
+
+
+# --- review of PR #18: the stored read carries blind / stuck_unknown, so exit_code can fire ----------
+
+
+def test_a_stored_read_over_a_crashed_plane_exits_2_and_names_the_stuck() -> None:
+    from edge_platform.watch.runner import exit_code
+
+    async def crash(_s):
+        raise RuntimeError("relation does not exist")
+
+    rig = Rig(unknown_after=2)
+    rig.register(spec("t-crash", crash))
+    rig.register(spec("t-ok", returning(Status.OK)))
+    run(rig.runner.run(object(), now=now(9, 10)))
+    once = run(rig.runner.read_stored(object(), now=now(9, 11)))
+    assert once["blind"] == ["t-crash"] and once["stuck_unknown"] == [] and exit_code(once) == 2
+    run(rig.runner.run(object(), now=now(9, 12)))
+    twice = run(rig.runner.read_stored(object(), now=now(9, 13)))
+    assert twice["blind"] == ["t-crash"] and twice["stuck_unknown"] == ["t-crash"] and exit_code(twice) == 2
+
+
+def test_a_stored_read_of_a_fresh_clean_plane_exits_0_and_a_never_swept_one_2() -> None:
+    from edge_platform.watch.runner import exit_code
+
+    rig = Rig()
+    rig.register(spec("t-ok", returning(Status.OK)))
+    never = run(rig.runner.read_stored(object(), now=now(9, 0)))
+    assert never["blind"] == ["t-ok"] and exit_code(never) == 2  # "not yet evaluated" is not clean
+    run(rig.runner.run(object(), now=now(9, 10)))
+    fresh = run(rig.runner.read_stored(object(), now=now(9, 20)))
+    assert fresh["blind"] == [] and fresh["stuck_unknown"] == [] and exit_code(fresh) == 0

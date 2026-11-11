@@ -177,8 +177,25 @@ def test_a_gated_skip_resets_a_stored_down_so_two_truths_cannot_stand() -> None:
     run(rig.runner.run(object(), notify=False, now=now(10)))
     assert rig.store.rows["t-gated"]["last_status"] == "down", "a read-only skip wrote the state"
     run(rig.runner.run(object(), now=now(10)))
-    assert rig.store.rows["t-gated"]["last_status"] == "ok"
+    # v0.11 fix-now: reset to IDLE, never to a pass
+    assert rig.store.rows["t-gated"]["last_status"] == "idle"
     assert rig.store.rows["t-gated"]["last_detail"] == wr.OFF_SESSION
+
+
+def test_a_never_run_gated_watchdog_stores_nothing_and_never_reads_ok() -> None:
+    """v0.11 fix-now: off-session, a watchdog that has never run was listed `ok` -- a verdict nobody
+    reached. It is IDLE in the sweep and in the stored read, and the store holds NO row (None)."""
+    rig = Rig()
+    rig.register(spec("t-new", returning(Status.OK), market_gated=True))
+    rig.session_day = False
+    res = run(rig.runner.run(object(), now=now()))
+    assert res["results"][0]["status"] == "idle" and "t-new" not in rig.store.rows
+    assert wr.exit_code(res) == 0  # idle is not a finding and not blind
+    stored = run(rig.runner.read_stored(object(), now=now()))["results"][0]
+    assert stored["status"] == "idle"
+    rig.session_day = True  # the first session-day sweep then records a real verdict
+    run(rig.runner.run(object(), now=now(10)))
+    assert rig.store.rows["t-new"]["last_status"] == "ok"
 
 
 def test_a_raising_market_gate_degrades_loudly_and_still_evaluates() -> None:
@@ -191,6 +208,61 @@ def test_a_raising_market_gate_degrades_loudly_and_still_evaluates() -> None:
     res = run(rig.runner.run(object(), now=now()))
     assert calls == ["x"] and res["session_day"] is True
     assert rig.degraded == ["watchdog_market_gate_failed"]
+
+
+@pytest.mark.parametrize("answer", [True, False])
+def test_an_answering_market_gate_never_reports_degraded(answer: bool) -> None:
+    """v0.11 fix-now: the other direction of the gate's must-fire test -- a gate that ANSWERS (either
+    way) is not degraded, so the raising case above is the only thing that fires it."""
+    rig = Rig()
+    rig.session_day = answer
+    rig.register(spec("t-gated", returning(Status.OK), market_gated=True))
+    res = run(rig.runner.run(object(), now=now()))
+    assert res["session_day"] is answer and rig.degraded == []
+
+
+def test_a_probe_unknown_for_n_sweeps_reports_degraded_and_exits_2() -> None:
+    """v0.11 fix-now: a crashed probe was UNKNOWN forever, never paged, never degraded. Must-fire both
+    ways: N-1 crashed sweeps stay quiet, the Nth (and every one after) reports
+    `watchdog_probe_unknown:<id>`; a probe that recovers resets the streak; and every sweep with an
+    UNKNOWN is exit 2 ("did not finish looking"), never 0 and never 1."""
+
+    async def crash(_s):
+        raise RuntimeError("relation does not exist")
+
+    rig = Rig(unknown_after=3)
+    rig.register(spec("t-crash", crash))
+    rig.register(spec("t-fine", returning(Status.OK)))
+    for i in (1, 2):
+        res = run(rig.runner.run(object(), now=now(9, i)))
+        assert res["blind"] == ["t-crash"] and res["stuck_unknown"] == [] and rig.degraded == []
+        assert wr.exit_code(res) == 2
+    assert rig.store.rows["t-crash"]["last_metrics"]["unknown_runs"] == 2
+    res = run(rig.runner.run(object(), now=now(9, 3)))
+    assert res["stuck_unknown"] == ["t-crash"] and rig.degraded == ["watchdog_probe_unknown:t-crash"]
+    run(rig.runner.run(object(), now=now(9, 4)))
+    assert rig.degraded == ["watchdog_probe_unknown:t-crash"] * 2  # every sweep while it stays stuck
+    assert rig.pages == []  # a broken probe still never pages as if the watched thing were down
+    run(rig.runner.run(object(), notify=False, now=now(9, 5)))
+    assert len(rig.degraded) == 2  # a read-only sweep does not report the plane's telemetry
+    rig.registry._specs.pop("t-crash")  # the probe is fixed: same id, a probe that answers
+    rig.register(spec("t-crash", returning(Status.OK)))
+    res = run(rig.runner.run(object(), now=now(9, 6)))
+    assert res["blind"] == [] and wr.exit_code(res) == 0
+    assert "unknown_runs" not in rig.store.rows["t-crash"]["last_metrics"]
+
+
+def test_exit_code_is_1_for_findings_and_0_when_clean() -> None:
+    rig = Rig()
+    rig.register(spec("t-down", returning(Status.DOWN)))
+    assert wr.exit_code(run(rig.runner.run(object(), now=now()))) == 1
+    assert wr.exit_code({"results": [{"status": "ok"}], "blind": []}) == 0
+    assert wr.exit_code({"results": [{"status": "warn"}], "blind": []}) == 1
+
+
+def test_unknown_after_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="unknown_after"):
+        Rig(unknown_after=0)
 
 
 def test_observe_only_spec_is_evaluated_recorded_but_never_paged() -> None:
@@ -430,3 +502,25 @@ def test_the_sql_store_refuses_an_unqualified_table() -> None:
 def test_now_defaults_to_the_injected_clock() -> None:
     rig = Rig(now=lambda: dt.datetime(2026, 8, 11, 12, 0, tzinfo=dt.UTC))
     assert run(rig.runner.run(object()))["now"] == "2026-08-11T12:00:00+00:00"
+
+
+# --- review of PR #18: a dead plane must not exit 0 ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("result", "code"),
+    [
+        ({"results": [], "blind": []}, 2),  # an empty sweep looked at nothing: an import failure, not clean
+        ({"blind": []}, 2),
+        ({"results": [{"status": "unknown"}], "blind": []}, 2),  # an UNKNOWN row, even with blind unset
+        ({"results": [{"status": "ok"}], "blind": [], "stale": ["t-old"]}, 2),  # nothing swept it lately
+        ({"results": [{"status": "ok"}, {"status": "idle"}], "blind": [], "stale": []}, 0),
+        ({"results": [{"status": "down"}], "blind": [], "stale": []}, 1),
+    ],
+)
+def test_exit_code_is_2_whenever_the_plane_did_not_finish_looking(result: dict, code: int) -> None:
+    assert wr.exit_code(result) == code
+
+
+def test_an_empty_registry_sweep_exits_2() -> None:
+    assert wr.exit_code(run(Rig().runner.run(object(), now=now()))) == 2

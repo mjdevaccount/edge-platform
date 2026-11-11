@@ -2,9 +2,17 @@
 
 Lifted from trade-data `service/usecases/source_gate.py` (M6 PL4). The two reads are INJECTED (the
 library owns no table): `read_disabled(session)` returns the ids an operator switched off, and
-`read_freshness(session, freshness_key, ts_col)` returns `(rows, newest, age_h)` for a lane's
-output. `mirror` names the switch table in every reason, so a daemon log line, a worklist's blocked
-marker and a decision card all say the same thing.
+`observe(session, spec)` returns the lane's `freshness.Observation` (the same read the freshness
+sweep makes). `mirror` names the switch table in every reason, so a daemon log line, a worklist's
+blocked marker and a decision card all say the same thing.
+
+v0.11 (M6 PL9): `input_absent` CALLS `freshness.judge`. v0.9 compared a wall-hours age with
+`cadence_h`, so a session-clock lane read "absent" every night and every weekend. A lane that
+declares `due_h` is now gated on exactly the page's limit, counted on its own clock (a non-wall lane
+must declare one). A lane WITHOUT `due_h` keeps the v0.9 limit -- `cadence_h` wall hours -- because
+the page's undeclared rule (ttl x3 / ttl+24h, 36h floor) is a paging threshold, not an input-
+presence one: on it, an hourly lane whose newest output is 20h old reads "present". The gate fails
+closed; declare `due_h` to widen it.
 
 BEST-EFFORT BY CONSTRUCTION. An unreadable switch table (a restore, an unapplied migration) reads as
 NOTHING disabled -- a control table must never black out the pipeline -- but never silently: a
@@ -16,24 +24,30 @@ same transaction, in every frame above a read of this gate. trade-data's 2026-09
 direct caller correct and the defect four frames up (a scan wrote its exits, then built a decision
 whose clearance read the switch; the rollback discarded the exits).
 
-`input_absent` never raises: off, no readable rows, older than the lane's own cadence, or the probe
-itself failing (unknown is not fresh) each return their own reason.
+`input_absent` never raises: off, no readable rows, past the lane's own limit on its own clock, or
+the observation itself failing (unknown is not fresh) each return their own reason.
 """
 
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import logging
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 
-from .spec import LaneRegistry
+from .freshness import Observation, judge
+from .spec import LaneRegistry, LaneSpec
 
 #: stdlib logging, so the gate imports with no extra (structlog renders it where installed)
 log = logging.getLogger("edge_platform.lanes.gate")
 
 ReadDisabled = Callable[[Any], Awaitable[Iterable[str]]]
-ReadFreshness = Callable[[Any, str, str], Awaitable[tuple[int, Any, float | None]]]
+Observe = Callable[[Any, LaneSpec], Awaitable[Observation]]
+
+
+def _utcnow() -> dt.datetime:
+    return dt.datetime.now(dt.UTC)
 
 
 class SourceGate:
@@ -42,17 +56,19 @@ class SourceGate:
         lanes: LaneRegistry,
         *,
         read_disabled: ReadDisabled,
-        read_freshness: ReadFreshness,
+        observe: Observe,
         mirror: str,
         on_degraded: Callable[[str], None] | None = None,
+        now: Callable[[], dt.datetime] = _utcnow,
     ) -> None:
         if not mirror.strip():
             raise ValueError("mirror must name the switch table (it is quoted in every reason)")
         self.lanes = lanes
         self._read_disabled = read_disabled
-        self._read_freshness = read_freshness
+        self._observe = observe
         self.mirror = mirror
         self._on_degraded = on_degraded
+        self._now = now
 
     async def disabled_sources(self, session: Any) -> frozenset[str]:
         """Ids the operator switched off. Empty -- loudly -- when the switch table cannot be read."""
@@ -85,17 +101,27 @@ class SourceGate:
             if off:
                 return off
             spec = self.lanes.get(source_id)
-            if spec is None or spec.freshness is None or spec.cadence_h is None or spec.freshness_key is None:
-                return None
-            rows, _newest, age_h = await self._read_freshness(session, spec.freshness_key, spec.freshness[1])
-            if not rows or age_h is None:
+            if spec is None or spec.freshness_key is None or not spec.limited:
+                return None  # nothing declared to gate on (an event lane): never a guessed limit
+            obs = await self._observe(session, spec)
+            if obs.newest_output is None:
                 return f"{spec.freshness_key} has no readable rows"
-            if age_h > spec.cadence_h:
-                return (
-                    f"{spec.freshness_key} newest write {age_h:.0f}h ago > cadence {spec.cadence_h:g}h "
-                    "-- the feed has stopped"
-                )
-            return None
+            now = self._now()
+            j = judge(spec, obs, now=now)
+            if j.age_h is None or j.limit_h is None:
+                return f"{spec.freshness_key} {j.state}: {j.why}"  # unmeasurable is not present
+            if spec.due_h is not None:
+                if j.age_h <= j.limit_h:
+                    return None  # inside its declared limit, on its own clock (held / abstaining included)
+                return f"{spec.freshness_key} {j.state}: {j.why}"
+            # No due_h: the stricter v0.9 limit (fail closed), never the page's 36h-floor rule.
+            age_wall = (now - obs.newest_output).total_seconds() / 3600.0
+            if spec.cadence_h is not None and age_wall <= spec.cadence_h:
+                return None
+            return (
+                f"{spec.freshness_key} newest write {age_wall:.1f}h ago > cadence {spec.cadence_h:g}h -- the "
+                f"gate's limit with no due_h declared (the page reads {j.state}: {j.why})"
+            )
         except Exception as exc:
             with contextlib.suppress(Exception):
                 await session.rollback()

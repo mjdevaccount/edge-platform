@@ -87,7 +87,7 @@ def test_the_limit_is_ttl_x3_or_ttl_plus_a_day_never_under_36h(ttl, ms, want) ->
 
 
 def test_the_state_list_is_closed_and_findings_are_named() -> None:
-    want = {"STALE": True, "STOPPED": True, "unknown": True, "HELD_LONG": True,
+    want = {"STALE": True, "STOPPED": True, "NEVER_RAN": True, "unknown": True, "HELD_LONG": True,
             "ok": False, "idle": False, "paused": False, "abstaining": False, "held": False}  # fmt: skip
     assert set(want) == set(f.STATES)
     for state, finding in want.items():
