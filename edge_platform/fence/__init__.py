@@ -11,7 +11,7 @@ observer-reconcile.py in_rth.
 CLI: `edge-fence check --tier service --need 45m` (cli.py). Policy: `fence-policy.json`.
 """
 
-from .fence import Decision, Policy, PolicyError, decide, load_policy
+from .fence import Decision, Policy, PolicyError, UnknownTier, decide, load_policy
 from .sessions import ClockBlind, Loaded, Sessions, load_sources
 
 __all__ = [
@@ -21,6 +21,7 @@ __all__ = [
     "Policy",
     "PolicyError",
     "Sessions",
+    "UnknownTier",
     "decide",
     "load_policy",
     "load_sources",

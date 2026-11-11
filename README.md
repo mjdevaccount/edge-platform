@@ -70,7 +70,8 @@ A refusal is a deferral: record it and try the next slot. Exit 2 is a refusal to
 `--override "<reason>"` allows and says so in the record (`source: override`). The record
 carries `until` (allowed: when the next window starts), `next_open_window` (refused: the
 earliest allowed instant with `--need` free), `source`, `horizon`, `policy_sha256`,
-`decision_id`. `--textfile` keeps `edge_fence_decisions_total{tier,result,source}` and
+`decision_id`. `--textfile` keeps `edge_fence_decisions_total{tier,result,source}` (result allow / refuse / blind / invalid -- an
+unknown tier is `invalid`, still exit 2, never `blind`) and
 `edge_fence_last_decision_timestamp_seconds{tier}` for node_exporter; the rules that read them
 (`FenceRunningBlind`, `FenceOverrideUsed`) belong to the alert owners and are not written yet.
 
