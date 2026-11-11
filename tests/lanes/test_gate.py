@@ -1,17 +1,24 @@
 """SourceGate: the switch reads, fails open LOUDLY, rolls back the caller's session, and input_absent
-returns its own reason for each branch (ported from trade-data tests/test_source_gate.py)."""
+returns its own reason for each branch (ported from trade-data tests/test_source_gate.py). v0.11:
+input_absent goes through `freshness.judge` -- the gate and the page cannot disagree, and a session
+lane is not "absent" overnight (lanes.md acceptance 5)."""
 
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import logging
 
 import pytest
 
+from edge_platform.lanes.freshness import Observation
 from edge_platform.lanes.gate import SourceGate
 from edge_platform.lanes.spec import Home, LaneRegistry, LaneSpec, LaneVocab
 
+from .clocks import et, rth
+
 MIRROR = "quant.content_source_registry.enabled = false"
+NOW = dt.datetime(2026, 9, 13, 9, 0, tzinfo=dt.UTC)
 
 
 class _Session:
@@ -26,22 +33,22 @@ class _World:
     def __init__(self) -> None:
         self.disabled: list[str] = []
         self.raise_disabled = False
-        self.fresh: tuple = (10, "2026-09-13 06:00:00", 3.0)
+        self.newest: dt.datetime | None = NOW - dt.timedelta(hours=3)
         self.raise_probe = False
         self.degraded: list[str] = []
+        self.asked: list[str] = []
 
     async def read_disabled(self, _s):
         if self.raise_disabled:
             raise RuntimeError("UndefinedTableError: quant.content_source_registry")
         return list(self.disabled)
 
-    async def read_freshness(self, _s, key: str, col: str):
-        # the contract: the lane's freshness KEY and its ts column (a stub ignoring its arguments
-        # would let a column/table swap pass)
-        assert (key, col) == ("domain.terminal_alerts", "received_at"), (key, col)
+    async def observe(self, _s, spec: LaneSpec) -> Observation:
+        self.asked.append(spec.id)  # the contract: the gate asks about THE lane it was given
         if self.raise_probe:
             raise RuntimeError("UndefinedColumn")
-        return self.fresh
+        return Observation(newest_output=self.newest, last_run=self.newest, last_status="ok", runs=10,
+                           registered_at=NOW - dt.timedelta(days=30))  # fmt: skip
 
 
 @pytest.fixture
@@ -49,20 +56,29 @@ def world() -> _World:
     return _World()
 
 
+def _walter(**kw) -> LaneSpec:
+    d = dict(
+        id="walter", kind="content", transport="gmail_label", entrypoint="sources.walter",
+        domain_tables=("domain.terminal_alerts",), freshness=("domain.terminal_alerts", "received_at"),
+        cadence_h=100.0, schedules=("flow:walter",), note="the wire", heartbeat="walter",
+    )  # fmt: skip
+    d.update(kw)
+    return LaneSpec(**d)
+
+
+def _gate(world: _World, *specs: LaneSpec, now=lambda: NOW, on_degraded=None) -> SourceGate:
+    reg = LaneRegistry(LaneVocab(homes={"trade": Home()}, default_home="trade"))
+    for s in specs:
+        reg.register(s)
+    return SourceGate(
+        reg, read_disabled=world.read_disabled, observe=world.observe, mirror=MIRROR,
+        on_degraded=on_degraded if on_degraded is not None else world.degraded.append, now=now,
+    )  # fmt: skip
+
+
 @pytest.fixture
 def gate(world: _World) -> SourceGate:
-    reg = LaneRegistry(LaneVocab(homes={"trade": Home()}, default_home="trade"))
-    reg.register(
-        LaneSpec(
-            id="walter", kind="content", transport="gmail_label", entrypoint="sources.walter",
-            domain_tables=("domain.terminal_alerts",), freshness=("domain.terminal_alerts", "received_at"),
-            cadence_h=100.0, schedules=("flow:walter",), note="the wire",
-        )
-    )  # fmt: skip
-    return SourceGate(
-        reg, read_disabled=world.read_disabled, read_freshness=world.read_freshness, mirror=MIRROR,
-        on_degraded=world.degraded.append,
-    )  # fmt: skip
+    return _gate(world, _walter())
 
 
 def _run(coro):
@@ -85,8 +101,7 @@ def test_a_raising_degraded_hook_does_not_become_the_failure(world) -> None:
     def boom(_r: str) -> None:
         raise RuntimeError("telemetry down")
 
-    g = SourceGate(LaneRegistry(LaneVocab(homes={"m": Home()}, default_home="m")), read_disabled=world.read_disabled,
-                   read_freshness=world.read_freshness, mirror=MIRROR, on_degraded=boom)  # fmt: skip
+    g = _gate(world, on_degraded=boom)
     world.raise_disabled = True
     assert _run(g.disabled_sources(_Session())) == frozenset()
 
@@ -99,25 +114,45 @@ def test_disabled_reason_is_one_wording(gate) -> None:
 def test_input_absent_has_a_reason_for_each_branch(gate, world) -> None:
     s = _Session()
     assert _run(gate.input_absent(s, "walter")) is None  # present on a normal day
+    assert world.asked == ["walter"]
     world.disabled = ["walter"]
     assert "source walter disabled" in (_run(gate.input_absent(s, "walter")) or "")
     world.disabled = []
-    world.fresh = (0, None, None)
+    world.newest = None
     assert "no readable rows" in (_run(gate.input_absent(s, "walter")) or "")
-    world.fresh = (10, "2026-09-09 06:00:00", 101.0)
-    assert "> cadence 100h" in (_run(gate.input_absent(s, "walter")) or "")
-    world.fresh = (10, "2026-09-13 06:00:00", 99.0)
+    # cadence 100h -> the judge's wall limit is min(300, 124) = 124h, the SAME limit the page uses
+    world.newest = NOW - dt.timedelta(hours=125)
+    assert "STOPPED" in (_run(gate.input_absent(s, "walter")) or "")  # its last run is as old as its output
+    world.newest = NOW - dt.timedelta(hours=123)
     assert _run(gate.input_absent(s, "walter")) is None
     world.raise_probe = True
     assert "unreadable" in (_run(gate.input_absent(s, "walter")) or "")
     assert s.rollbacks == 1
 
 
-def test_an_unknown_or_unprobed_lane_is_not_absent(gate) -> None:
-    assert _run(gate.input_absent(_Session(), "never_declared")) is None
+def test_an_unknown_or_unlimited_lane_is_not_absent(world) -> None:
+    g = _gate(world, _walter(id="event_lane", cadence_h=None, heartbeat=None))
+    assert _run(g.input_absent(_Session(), "never_declared")) is None
+    assert _run(g.input_absent(_Session(), "event_lane")) is None and world.asked == []
 
 
 def test_mirror_is_required(world) -> None:
+    reg = LaneRegistry(LaneVocab(homes={"m": Home()}, default_home="m"))
     with pytest.raises(ValueError, match="mirror"):
-        SourceGate(LaneRegistry(LaneVocab(homes={"m": Home()}, default_home="m")), read_disabled=world.read_disabled,
-                   read_freshness=world.read_freshness, mirror=" ")  # fmt: skip
+        SourceGate(reg, read_disabled=world.read_disabled, observe=world.observe, mirror=" ")
+
+
+# --- lanes.md acceptance 5: a session lane overnight is not absent -------------------------------
+
+
+def test_a_session_lane_overnight_is_present_and_the_wall_hours_bug_is_gone(world) -> None:
+    rth()
+    gated = _walter(id="board", cadence_h=1 / 30, due_h=0.25, clock="t_xnys_rth")
+    wall = _walter(id="board_wall", cadence_h=1 / 30, due_h=0.25)  # the same limit counted in WALL hours
+    sunday_3am = et(2026, 11, 8, 3)
+    world.newest = et(2026, 11, 6, 15, 58)  # Friday, two minutes before the close
+    g = _gate(world, gated, wall, now=lambda: sunday_3am)
+    assert _run(g.input_absent(_Session(), "board")) is None  # 2 session-minutes old: present
+    assert _run(g.input_absent(_Session(), "board_wall")) is not None  # v0.9 wall model: absent every night
+    monday = _gate(world, gated, now=lambda: et(2026, 11, 9, 9, 50))  # 20 session-minutes in, no run
+    assert "STOPPED" in (_run(monday.input_absent(_Session(), "board")) or "")

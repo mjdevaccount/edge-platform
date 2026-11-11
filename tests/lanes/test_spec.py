@@ -30,7 +30,7 @@ def _base(**kw) -> LaneSpec:
     d = dict(
         id="t_src", kind="content", transport="api", entrypoint="sources.t_src",
         domain_tables=("quant.t_tbl",), freshness=("quant.t_tbl", "ts"), cadence_h=1.0,
-        schedules=("flow:t_flow",), note="t",
+        schedules=("flow:t_flow",), note="t", heartbeat="t_src",
     )  # fmt: skip
     d.update(kw)
     return LaneSpec(**d)
@@ -58,7 +58,9 @@ def test_a_malformed_spec_is_refused_at_declaration(bad: dict) -> None:
 
 
 def test_the_good_shapes_construct() -> None:
-    assert _base(retired="2026-06-23 gone", schedules=("manual",), freshness=None, cadence_h=None).retired
+    assert _base(
+        retired="2026-06-23 gone", schedules=("manual",), freshness=None, cadence_h=None, heartbeat=None
+    ).retired
     assert _base(schedules=("queue:email_vision", "manual")).schedules
     s = _base(freshness_where="source = 'tear_feed'", work_unit="pull_t")
     assert s.freshness_key == "quant.t_tbl WHERE source = 'tear_feed'"
@@ -145,3 +147,68 @@ def test_a_consumer_extends_the_core_by_subclassing() -> None:
     with pytest.raises(ValueError, match="snake_case"):  # the core's checks still run
         SourceSpec(**{**dataclasses.asdict(_base()), "id": "Bad"}, data_class="owned")
     assert LaneRegistry(VOCAB).register(SourceSpec(**dataclasses.asdict(_base()), data_class="owned"))
+
+
+# --- v0.11 (PL9): due_h, clock, repo, the run-ledger rule ----------------------------------------
+
+
+class _SessionClock:
+    name = "t_session"
+
+    def hours(self, start, end):  # never called here: registration only
+        return 0.0
+
+
+def test_market_gated_is_gone() -> None:
+    """The v0.9 boolean said a clock existed, not which, and nothing consumed it: passing it is a
+    TypeError now, never a silently ignored field."""
+    with pytest.raises(TypeError, match="market_gated"):
+        _base(market_gated=True)
+
+
+@pytest.mark.parametrize(
+    ("kw", "match"),
+    [
+        (dict(due_h=0.0), "due_h must be positive"),
+        (dict(cadence_h=1.0, due_h=1.0), "due_h 1 <= cadence_h 1"),  # acceptance 4: due_h <= cadence_h
+        (dict(cadence_h=1.0, due_h=0.5), "<= cadence_h"),
+        (dict(clock="t_session", cadence_h=1 / 30), "needs due_h"),  # acceptance 4: non-wall without due_h
+        (dict(clock="Bad Clock"), "clock"),
+        (dict(repo="Not A Repo"), "repo"),
+        (dict(work_unit="pull_t", cadence_h=None, due_h=None), "work_unit"),
+    ],
+)  # fmt: skip
+def test_the_due_and_clock_shapes_are_refused(kw: dict, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        _base(**kw)
+
+
+def test_the_due_and_clock_shapes_that_construct() -> None:
+    s = _base(cadence_h=1 / 30, due_h=0.25, clock="t_session", repo="other-repo")
+    assert (s.due_h, s.clock, s.repo, s.limited, s.judged) == (0.25, "t_session", "other-repo", True, True)
+    assert _base(cadence_h=None, due_h=6.0).limited  # an event lane may declare only a due
+    assert _base(work_unit="pull_t", cadence_h=None, due_h=6.0).work_unit == "pull_t"
+    assert not _base(cadence_h=None).judged and not _base(schedules=("manual",)).judged
+
+
+def test_an_unregistered_clock_is_refused_at_register_and_a_registered_one_passes() -> None:
+    from edge_platform.lanes.freshness import register_clock
+
+    spec = _base(cadence_h=1 / 30, due_h=0.25, clock="t_nobody_registered")
+    with pytest.raises(ValueError, match="not registered"):
+        LaneRegistry(VOCAB).register(spec)
+    register_clock(_SessionClock())
+    ok = _base(cadence_h=1 / 30, due_h=0.25, clock="t_session")
+    assert LaneRegistry(VOCAB).register(ok) is ok
+
+
+def test_a_judged_lane_without_a_run_ledger_is_refused_both_ways() -> None:
+    """Invariant 4: STOPPED needs a run ledger. Refused: freshness + limit + a schedule, no work_unit,
+    no heartbeat. Passes: either ledger, transport='computed', a manual lane, an event lane."""
+    with pytest.raises(ValueError, match="run ledger"):
+        LaneRegistry(VOCAB).register(_base(heartbeat=None))
+    for good in (
+        _base(heartbeat=None, work_unit="pull_t"), _base(), _base(heartbeat=None, transport="computed"),
+        _base(heartbeat=None, schedules=("manual",)), _base(heartbeat=None, cadence_h=None),
+    ):  # fmt: skip
+        assert LaneRegistry(VOCAB).register(good) is good

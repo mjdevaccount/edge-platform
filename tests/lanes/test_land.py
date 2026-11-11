@@ -82,7 +82,8 @@ class _Pipeline:
         self.rowcount, self.fail_sql, self.run_raises = rowcount, fail_sql, run_raises
         self.last_trace = SimpleNamespace(last_normalize_info=SimpleNamespace(row_counts={"t": landed}))
 
-    def run(self, _resource):
+    def run(self, _resource, **kw):
+        self.run_kw = kw
         if self.run_raises:
             raise RuntimeError("source API down")
         return SimpleNamespace(raise_on_failed_jobs=lambda: None, loads_ids=["L1"] if self.landed else [])
@@ -155,3 +156,21 @@ def test_the_heartbeat_table_is_validated_because_it_is_interpolated(table: str)
 def test_the_heartbeat_sql_names_the_injected_table() -> None:
     sql = Heartbeat(table="mine.beats", source="x").sql()
     assert "INSERT INTO mine.beats" in sql and "mine.beats.last_ok_at" in sql and "ops." not in sql
+
+
+# --- v0.11: the dlt schema contract is explicit -----------------------------------------------------
+
+
+def test_the_explicit_contract_is_always_passed_to_dlt(pipe) -> None:
+    """dlt's own default for a pydantic `columns=` resource is discard_value: a new vendor field
+    vanishes. The contract is passed on EVERY run, freeze unless the call site loosens it."""
+    pipe["pipe"] = p = _Pipeline(landed=3, rowcount=3)
+    land_and_promote(object(), **ARGS)
+    assert p.run_kw == {"schema_contract": {"tables": "evolve", "columns": "freeze", "data_type": "freeze"}}
+    pipe["pipe"] = p = _Pipeline(landed=3, rowcount=3)
+    land_and_promote(object(), **ARGS, schema_contract="evolve")  # an explicit, reviewable loosening
+    assert p.run_kw == {"schema_contract": "evolve"}
+    for bad in (None, {}):
+        with pytest.raises(ValueError, match="explicit schema_contract"):
+            land_and_promote(object(), **ARGS, schema_contract=bad)  # type: ignore[arg-type]
+    assert land_mod.DEFAULT_CONTRACT["columns"] == "freeze"
