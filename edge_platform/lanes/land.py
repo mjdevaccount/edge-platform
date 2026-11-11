@@ -27,18 +27,17 @@ beats ok=false, best-effort, then re-raises. The library names no table.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
 import dlt
 import structlog
 
+from edge_platform.sqlkit import qualified
+
 from .destination import nolock_postgres
 
 log = structlog.get_logger("edge_platform.lanes.land")
-
-_QUALIFIED = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
 
 
 @dataclass(frozen=True)
@@ -49,8 +48,7 @@ class Heartbeat:
     source: str
 
     def __post_init__(self) -> None:
-        if not _QUALIFIED.match(self.table):
-            raise ValueError(f"heartbeat table {self.table!r} must be a lower-case schema.table")
+        qualified(self.table, "heartbeat table")
         if not self.source.strip():
             raise ValueError("heartbeat source must be non-empty")
 

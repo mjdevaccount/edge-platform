@@ -16,6 +16,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from edge_platform.sqlkit import savepoint as savepoint  # re-export (moved, v0.10.0)
+
 #: Postgres truncates application_name at NAMEDATALEN-1 bytes.
 APP_NAME_MAX = 63
 
@@ -112,32 +114,5 @@ def statement_cache_args(env_name: str, default: int = 0) -> dict[str, int]:
     return {"statement_cache_size": n, "prepared_statement_cache_size": n}
 
 
-class _NoSavepoint:
-    async def __aenter__(self) -> None:
-        return None
-
-    async def __aexit__(self, *exc: object) -> bool:
-        return False
-
-
-def savepoint(session: Any) -> Any:
-    """A SAVEPOINT on a SHARED session (SQLAlchemy `begin_nested`), so one caller's failed SQL rolls
-    back to the mark and the callers after it keep a live transaction.
-
-        for probe in probes:
-            try:
-                async with savepoint(session):
-                    await probe(session)
-            except Exception: ...
-
-    THE RULE IT ENFORCES: catching a SQL error does NOT un-abort a Postgres transaction. Every later
-    statement on that connection then fails with InFailedSQLTransactionError -- including
-    SQLAlchemy's own `SAVEPOINT sa_savepoint_N`, which is why the recovery has to be opened BEFORE
-    the failure, not after it. Any fan-out over one session needs this around each member.
-
-    A session without `begin_nested` gets a no-op, for test sentinels that stand in for a session
-    without being one. That fallback is deliberately more permissive than Postgres, so a containment
-    test must hand in a fake that HAS `begin_nested` and refuses it on an aborted transaction, the
-    way the database does."""
-    nested = getattr(session, "begin_nested", None)
-    return nested() if nested is not None else _NoSavepoint()
+# `savepoint` lives in edge_platform.sqlkit since v0.10.0 (stdlib, so the watchdog runner shares the
+# ONE copy); re-exported here so `from edge_platform.service.db import savepoint` keeps working.

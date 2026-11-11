@@ -1,7 +1,7 @@
 [project]
 name = "edge-platform"
-version = "0.9.0"
-description = "EDGE's shared platform package: the ntfy.sh push budget (notify), the trading-hours deploy fence (fence), the compose-rules .env reader (env), the duplicate-guarded spec registry (registry), the FastAPI service kit (service), shipped Windmill step templates (windmill) and ingest lanes (lanes)."
+version = "0.10.0"
+description = "EDGE's shared platform package: the ntfy.sh push budget (notify), the trading-hours deploy fence (fence), the compose-rules .env reader (env), the duplicate-guarded spec registry (registry), the FastAPI service kit (service), shipped Windmill step templates (windmill), ingest lanes (lanes), the watchdog plane (watch) and fingerprints (stamp)."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -27,6 +27,11 @@ service = [
     "sqlalchemy[asyncio]>=2.0.36",
     "structlog>=24.4",
 ]
+# The async-SQL stores: edge_platform.watch.state (the watchdog dedup memory) and
+# edge_platform.notify.ledger (claims / budget / deliveries). Table names are the consumer's.
+sql = [
+    "sqlalchemy[asyncio]>=2.0.36",
+]
 # edge_platform.lanes: dlt land/promote + the no-TRUNCATE postgres destination. The LaneSpec core,
 # source gate and freshness verdict are stdlib and import without it.
 dlt = [
@@ -44,7 +49,8 @@ packages = ["edge_platform"]
 [dependency-groups]
 dev = [
     "aiosqlite>=0.21",
-    "edge-platform[dlt,service]",
+    "asyncpg>=0.30",
+    "edge-platform[dlt,service,sql]",
     "exchange-calendars>=4.13.2",
     "httpx>=0.28",
     "pytest>=8.3",

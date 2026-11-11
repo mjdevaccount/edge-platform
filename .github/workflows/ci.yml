@@ -16,6 +16,16 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # v0.10.0: the SQL stores (watch.state, notify.ledger) run against a REAL Postgres -- a faked store
+    # proves the caller, never the statement. REQUIRED=1 turns the local "no DSN -> skip" into a FAIL.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.0
@@ -25,6 +35,9 @@ jobs:
           uv run ruff check --output-format=github .
           uv run ruff format --check .
       - name: tests
+        env:
+          EDGE_PLATFORM_TEST_PG: postgresql://postgres:test@localhost:5432/postgres
+          EDGE_PLATFORM_TEST_PG_REQUIRED: "1"
         run: uv run pytest -q
       - name: the .env twins against docker compose itself (tests/env/lib-env.test.sh)
         # The oracle: both twins over one fixture, LF and CRLF, against answers compose produced, and
@@ -54,6 +67,10 @@ jobs:
           # v0.9.0: the lane core (spec, gate, freshness) is stdlib -- BASE wheel; land + destination need [dlt]
           uv run --isolated --no-project --with "${whl}" python -c "import edge_platform.lanes.spec, edge_platform.lanes.gate, edge_platform.lanes.freshness"
           uv run --isolated --no-project --with "${whl}[dlt]" python -c "from edge_platform.lanes.destination import nolock_postgres; from edge_platform.lanes.land import land_and_promote; assert nolock_postgres()._raw_capabilities().supports_truncate_command is False"
+          # v0.10.0: the watchdog plane, the notify pipeline, stamp and sqlkit are stdlib -- BASE wheel (no
+          # sqlalchemy there, so this also proves the runner never imports it); the two SQL stores need [sql]
+          uv run --isolated --no-project --with "${whl}" python -c "import edge_platform.watch.spec, edge_platform.watch.runner, edge_platform.watch.pager, edge_platform.notify.pipeline, edge_platform.notify.types, edge_platform.notify.local, edge_platform.stamp, edge_platform.sqlkit"
+          uv run --isolated --no-project --with "${whl}[sql]" python -c "import edge_platform.watch.state, edge_platform.notify.ledger"
           # v0.8.0: the Windmill templates ship IN the wheel and copy out of it (base wheel, no extra)
           tmp=$(mktemp -d)
           uv run --isolated --no-project --with "${whl}" python -m edge_platform.windmill copy post_admin_run "$tmp" u/admin/post_admin_run
