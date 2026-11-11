@@ -28,6 +28,7 @@ re-asks compose in CI.
 ```
 from edge_platform.env import lib_env          # python that can install the wheel
 lib_env.get("WINDMILL_TOKEN", "/path/.env")    # str | None; raises lib_env.EnvBlind
+lib_env.get("WINDMILL_TOKEN")                  # FILE = $EDGE_INFRA_ENV at call time; unset = EnvBlind (v0.6.0: no built-in path)
 
 edge-env get KEY [FILE]                        # exit 0 assigned / 1 not assigned / 2 BLIND
 edge-env digest FILE KEY...                    # sha256[:12] per key, for comparing readers
@@ -50,7 +51,7 @@ that each compute the same window: edge-host `rth-guard.sh` / `lib-clock.sh` / `
 
 | file | says |
 |---|---|
-| `fence-policy.json` | per tier: fenced or not, pads before the open / after the close (15 / 35 min), blackouts, and the blind superset (Mon-Fri 09:15-16:35 ET). Holidays and half-day afternoons are OPEN (operator call 1, 2026-10-24); tiers `ui` and `quant` are OPEN in the session (operator decision 2026-10-21); an unknown tier is exit 2 |
+| the policy (CONSUMER-SUPPLIED since v0.6.0: `--policy PATH` / `$EDGE_FENCE_POLICY`; none = exit 2) | per tier: fenced or not, pads before the open / after the close, blackouts, and the blind superset. Schema 1; `tests/fence/fixtures/fence-policy.json` is a worked example (EDGE's own lives in edge-host `policy/fence-policy.json`). An unknown tier is exit 2 |
 | `sessions-bundled.json` | XNYS sessions ~2 years ahead from exchange_calendars (`scripts/gen_bundled_sessions.py`); CI fails when < 180 days remain |
 
 The session table comes from the first source that answers: `quant.market_sessions` (`--dsn` /
@@ -84,9 +85,9 @@ on the home IP shares them. Three files say everything about that budget:
 |---|---|---|
 | `ntfy-policy.json` | HOW MUCH: reserve, per-publisher cap and its exemptions, the night window, tiers, the send-ledger layout | `policy.py` (stdlib only), edge-host `lib-notify.sh`, trade-data `ntfy_client.py`, llm box `lib-notify.ps1` |
 | `ntfy-policy.cases.json` | the literal cases every reader runs in its own language, and `policy_sha256` pinning the policy bytes | each consumer's CI |
-| `ntfy-publishers.json` | WHO spends it: every sender, its route (`library` / `direct` / `am-webhook` / `gatus` / `ci`) and mode (`gated` / `counted` / `exempt` + why / `uncounted` + what is owed) | `publishers.py` |
+| the sender registry (CONSUMER-SUPPLIED since v0.6.0: `--registry PATH` / `$EDGE_NOTIFY_PUBLISHERS`; none = exit 2) | WHO spends it: every sender, its route (`library` / `direct` / `am-webhook` / `gatus` / `ci`) and mode (`gated` / `counted` / `exempt` + why / `uncounted` + what is owed). Example: `tests/fixtures/ntfy-publishers.json`; EDGE's lives in edge-host `policy/ntfy-publishers.json` | `publishers.py` |
 
-CANONICAL TODAY: this repo for `ntfy-publishers.json`; **edge-host's `policy/ntfy-policy.json`
+CANONICAL TODAY: edge-host `policy/ntfy-publishers.json` for the registry (v0.6.0); **edge-host's `policy/ntfy-policy.json`
 for the policy and its cases** -- the copy here is a parity-checked copy (mcp
 `scripts/lint_script_parity.py` PARITY_PATHS), byte-identical (sha256 `186af626…`), so no consumer
 had to move. The policy's canonical home moves HERE at v0.2, in the same release that edits the
@@ -102,7 +103,7 @@ release instead.
 | `edge-notify check-copy FILE` | a vendored policy copy is byte-identical (LF) to this release |
 | `edge-notify check-pin [POLICY [CASES]]` | the cases file pins the policy's sha256 |
 | `edge-notify shell` / `rows` | `_ENP_*` lines for lib-notify.sh; the shared cases as TAB rows for a bash test |
-| `edge-notify senders` | the registry, validated against the policy's exemptions |
+| `edge-notify senders [--registry FILE]` | the registry (FILE or `$EDGE_NOTIFY_PUBLISHERS`), validated against the policy's exemptions |
 
 Exit 0 = clean, 1 = findings, 2 = BLIND (unreadable or invalid input) -- a crashed check never
 reads as a passing one. Run it without installing: `uvx --from <wheel URL> edge-notify ...`.
@@ -111,4 +112,8 @@ reads as a passing one. Run it without installing: `uvx --from <wheel URL> edge-
 
 Bump `version` in `pyproject.toml` and `edge_platform/__init__.py`, merge, tag `vX.Y.Z`. The
 release workflow refuses a tag that disagrees with either, then attaches the wheel, the sdist,
-the three notify files and `SHA256SUMS`.
+the two notify policy files, the env twins and `SHA256SUMS`.
+
+**No estate data in the package (v0.6.0).** A consumer's tiers, senders and file paths are its own
+config, passed in by path or environment; a missing one is exit 2 / an exception naming the knob,
+never a default. The wheel CI step fails if `fence-policy` or `ntfy-publishers` reappear in it.

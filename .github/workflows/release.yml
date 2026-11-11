@@ -3,6 +3,8 @@
 #   Python:      edge-platform @ https://github.com/mjdevaccount/edge-platform/releases/download/vX.Y.Z/edge_platform-X.Y.Z-py3-none-any.whl
 #   CI (any):    uvx --from <that wheel URL> edge-notify am-night|check-copy|senders ...
 #   non-Python:  the release assets ntfy-policy.json, lib-env.sh, lib_env.py, verified against SHA256SUMS
+# The fence policy and the ntfy sender registry are NOT assets since v0.6.0: they are each
+# consumer's own config (`--policy` / $EDGE_FENCE_POLICY, `--registry` / $EDGE_NOTIFY_PUBLISHERS).
 # The tag must match pyproject's version, or the release is refused before anything uploads.
 name: release
 
@@ -28,10 +30,9 @@ jobs:
       - run: uv sync --frozen
       - run: uv run pytest -q
       - run: uv build
-      - name: notify + fence + env assets + SHA256SUMS
+      - name: notify + env assets + SHA256SUMS
         run: |
           cp edge_platform/notify/ntfy-policy.json edge_platform/notify/ntfy-policy.cases.json \
-             edge_platform/notify/ntfy-publishers.json edge_platform/fence/fence-policy.json \
              edge_platform/env/lib-env.sh edge_platform/env/lib_env.py dist/
           (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
       - name: publish release

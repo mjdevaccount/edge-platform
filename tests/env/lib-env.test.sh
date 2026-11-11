@@ -156,6 +156,14 @@ refuse "nested template (not ported)"           "FX_A=\${FX_NOT_SET:-\${FX_PLAIN
 refuse "non-ASCII whitespace (not ported)"      "$(printf 'FX_A=%s\302\240x' "$SECRET")"
 refuse "octal NUL (not ported)"                 "FX_A=\"$SECRET\\0000\""
 env_get FX_A "$TMPD/does-not-exist.env" >/dev/null 2>&1; [ $? = 2 ] && ok "an unreadable file is rc 2" || bad "unreadable file rc"
+# No FILE and nothing configured is BLIND from both twins: there is no built-in path (v0.6.0).
+rb=$(ENV_DEFAULT_FILE='' EDGE_INFRA_ENV='' HOME="$TMPD" bash -c '. "$1/lib-env.sh"; env_get FX_A' _ "$LIB" >/dev/null 2>&1; echo $?)
+rp=$(EDGE_INFRA_ENV='' HOME="$TMPD" python3 "$LIB/lib_env.py" get FX_A >/dev/null 2>&1; echo $?)
+[ "$rb" = 2 ] && [ "$rp" = 2 ] && ok "no FILE and no EDGE_INFRA_ENV is rc 2 (both)" || bad "no FILE: bash rc $rb, python rc $rp (want 2, 2)"
+printf 'FX_A=%s\n' "$SECRET" > "$TMPD/clean.env"
+rb=$(EDGE_INFRA_ENV="$TMPD/clean.env" bash -c '. "$1/lib-env.sh"; env_get FX_A' _ "$LIB" 2>/dev/null)
+rp=$(EDGE_INFRA_ENV="$TMPD/clean.env" python3 "$LIB/lib_env.py" get FX_A 2>/dev/null)
+[ "$rb" = "$SECRET" ] && [ "$rp" = "$SECRET" ] && ok "EDGE_INFRA_ENV names the default file (both)" || bad "EDGE_INFRA_ENV default not honoured"
 printf 'FX_A=%s\n' "$SECRET" > "$TMPD/clean.env"
 [ "$(env_get FX_A "$TMPD/clean.env")" = "$SECRET" ] && ok "the same key in a clean file is answered (not refused)" \
   || bad "a clean file was refused"

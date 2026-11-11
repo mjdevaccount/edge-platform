@@ -8,13 +8,15 @@ observer-reconcile.py in_rth.
     from edge_platform.fence import decide, load_sources
     d = decide("service", at=now, need=dt.timedelta(minutes=45), loaded=load_sources(dsn=..., cache=...))
 
-CLI: `edge-fence check --tier service --need 45m` (cli.py). Policy: `fence-policy.json`.
+CLI: `edge-fence check --tier service --need 45m` (cli.py). Policy: the CONSUMER's (`--policy` /
+`$EDGE_FENCE_POLICY`, v0.6.0); `tests/fence/fixtures/fence-policy.json` is a worked example.
 """
 
-from .fence import Decision, Policy, PolicyError, UnknownTier, decide, load_policy
+from .fence import POLICY_ENV, Decision, Policy, PolicyError, UnknownTier, decide, load_policy, policy_path
 from .sessions import ClockBlind, Loaded, Sessions, load_sources
 
 __all__ = [
+    "POLICY_ENV",
     "ClockBlind",
     "Decision",
     "Loaded",
@@ -25,4 +27,5 @@ __all__ = [
     "decide",
     "load_policy",
     "load_sources",
+    "policy_path",
 ]

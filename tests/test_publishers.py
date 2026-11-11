@@ -10,7 +10,9 @@ import pytest
 from edge_platform.notify import policy as pol
 from edge_platform.notify import publishers as pubs
 
-RAW = json.loads(pubs.REGISTRY_PATH.read_text(encoding="utf-8"))
+from .conftest import PUBLISHERS
+
+RAW = json.loads(PUBLISHERS.read_text(encoding="utf-8"))
 
 
 def _sender(raw: dict, name: str) -> dict:

@@ -58,9 +58,19 @@ import re
 import sys
 from collections.abc import Mapping
 
-DEFAULT_FILE = os.environ.get("EDGE_INFRA_ENV") or os.path.join(
-    os.environ.get("HOME", "/home/matt"), "edge/trade-infra/.env"
-)
+#: The file a call without one reads: `$EDGE_INFRA_ENV`, read at CALL time. There is no built-in
+#: path (until v0.6.0 it fell back to `~/edge/trade-infra/.env`, one estate's layout inside a public
+#: package): no file named and none configured is EnvBlind, never a guess at someone's home dir.
+DEFAULT_ENV_VAR = "EDGE_INFRA_ENV"
+DEFAULT_FILE = os.environ.get(DEFAULT_ENV_VAR) or None  # import-time snapshot, kept for old callers
+
+
+def default_file() -> str:
+    """`$EDGE_INFRA_ENV`, or EnvBlind naming the two ways to say which file."""
+    f = os.environ.get(DEFAULT_ENV_VAR)
+    if not f:
+        raise EnvBlind(f"no .env file named: pass FILE or set {DEFAULT_ENV_VAR}")
+    return f
 
 
 class EnvBlind(RuntimeError):
@@ -260,8 +270,10 @@ def parse(text: str, environ: Mapping[str, str] | None = None) -> dict[str, str]
     return _Parser(text, os.environ if environ is None else environ).run()
 
 
-def load(path: str | os.PathLike[str] = DEFAULT_FILE, environ: Mapping[str, str] | None = None) -> dict[str, str]:
-    """The whole file. Raises EnvBlind when it cannot be read or parsed."""
+def load(path: str | os.PathLike[str] | None = None, environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The whole file (default: default_file()). Raises EnvBlind when it cannot be named, read or parsed."""
+    if path is None:
+        path = default_file()
     try:
         with open(path, encoding="utf-8", newline="") as fh:
             text = fh.read()
@@ -273,7 +285,7 @@ def load(path: str | os.PathLike[str] = DEFAULT_FILE, environ: Mapping[str, str]
         raise EnvBlind(f"{path}: {e}") from e
 
 
-def get(key: str, path: str | os.PathLike[str] = DEFAULT_FILE, environ: Mapping[str, str] | None = None) -> str | None:
+def get(key: str, path: str | os.PathLike[str] | None = None, environ: Mapping[str, str] | None = None) -> str | None:
     """KEY's value, or None when the file does not assign it. Raises EnvBlind."""
     return load(path, environ).get(key)
 
@@ -285,7 +297,7 @@ def digest(value: str) -> str:
 def main(argv: list[str]) -> int:
     try:
         if len(argv) in (2, 3) and argv[0] == "get":
-            v = get(argv[1], argv[2] if len(argv) == 3 else DEFAULT_FILE)
+            v = get(argv[1], argv[2] if len(argv) == 3 else None)
             if v is None:
                 return 1
             sys.stdout.write(v)

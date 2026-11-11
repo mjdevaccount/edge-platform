@@ -2,7 +2,7 @@
 
   edge-fence check --tier T [--need 45m] [--at INSTANT] [--override "<reason>"]
   edge-fence status                     which source answers right now, its horizon and age
-  edge-fence path [policy|bundled]      the packaged file's path
+  edge-fence path [policy|bundled]      the configured policy's path / the packaged session table's
 
 check prints ONE JSON line (the decision record) on stdout and exits 0 allow · 1 refuse ·
 2 could not evaluate; a caller treats 2 as refuse. A refusal is a deferral, never a failed run.
@@ -19,6 +19,8 @@ invalid (the caller named a tier the policy does not have -- still exit 2, but n
 A counter that cannot be written never changes the verdict: it warns on stderr, and the stale
 timestamp is what an outside rule sees. Any crash is exit 2 with a record, never rc 1 or 0.
 --need defaults to the tier's need_min in the policy.
+POLICY (since v0.6.0 the consumer's, not the package's): --policy PATH or $EDGE_FENCE_POLICY;
+neither is exit 2 (blind) -- the package carries no estate's tiers.
 INSTANT: ISO 8601 with an offset, `@EPOCH`, or a naive value read as ET wall time (lib-clock's rule).
 """
 
@@ -63,7 +65,7 @@ def _p(argv: list[str] | None) -> argparse.Namespace:
     ap.add_argument("--cache", type=Path, default=Path(os.environ.get("CLOCK_SESSIONS_FILE") or sessions.CACHE_FILE))
     ap.add_argument("--max-age-h", default=os.environ.get("CLOCK_MAX_AGE_H") or str(sessions.MAX_AGE_H))
     ap.add_argument("--write-cache", type=Path, default=os.environ.get("EDGE_FENCE_WRITE_CACHE") or None)
-    ap.add_argument("--policy", type=Path, default=None)
+    ap.add_argument("--policy", type=Path, default=os.environ.get(fence.POLICY_ENV) or None)
     ap.add_argument("--textfile", type=Path, default=os.environ.get("EDGE_FENCE_TEXTFILE") or None)
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("check")
@@ -134,8 +136,10 @@ def _blind(textfile: Path | None, tier: str, why: str, result: str = "blind") ->
 
 def run(a: argparse.Namespace) -> int:
     if a.cmd == "path":
-        name = fence.POLICY if a.which == "policy" else sessions.BUNDLED
-        print(resources.files(fence.__package__).joinpath(name))
+        if a.which == "policy":
+            print(fence.policy_path(a.policy))
+        else:
+            print(resources.files(fence.__package__).joinpath(sessions.BUNDLED))
         return 0
     loaded = sessions.load_sources(dsn=a.dsn, cache=a.cache, max_age_h=float(a.max_age_h), write_to=a.write_cache)
     if a.cmd == "status":
