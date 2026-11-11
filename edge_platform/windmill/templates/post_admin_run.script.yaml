@@ -1,0 +1,55 @@
+summary: POST one <service>/admin/run/<kind> (the shared flow step, edge-platform template)
+description: Referenced by path from a flow module (type script). service_url and
+  key_variable are REQUIRED (no default service, no default key). Keeps the response
+  body on failure so a 503 shed stays a managed skip; drops None/blank params;
+  fail_when fails a 200 whose body says it failed. Source of truth edge-platform
+  edge_platform/windmill/templates/post_admin_run.py.
+lock: '!inline __SCRIPT_PATH__.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    service_url:
+      type: string
+      description: the service base URL, e.g. http://my-service:8090 (required, no default)
+    key_variable:
+      type: string
+      description: the Windmill variable path holding the service's X-API-Key (required, no default)
+    kind:
+      type: string
+      description: the /admin/run/<kind> segment
+    params:
+      type: object
+      description: query parameters; None or blank values are not sent
+      default: null
+    body:
+      type: object
+      description: JSON body; None sends no body, {} sends {}
+      default: null
+    timeout:
+      type: number
+      description: request timeout, seconds
+      default: 60.0
+    route:
+      type: string
+      description: the prefix the kind is mounted under
+      default: /admin/run
+    send_key:
+      type: boolean
+      description: present the key; false only for a service that verifies no key
+      default: true
+    require_key:
+      type: boolean
+      description: fail the step when the key variable is empty or unreadable
+        (default fail-open, safe only when the service ledgers anonymous writes)
+      default: false
+    fail_when:
+      type: object
+      description: 'body key -> the value that fails a 200 (type and value
+        match), e.g. {worklist_jammed: true}'
+      default: null
+  required:
+    - service_url
+    - key_variable
+    - kind

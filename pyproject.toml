@@ -1,7 +1,7 @@
 [project]
 name = "edge-platform"
-version = "0.7.0"
-description = "EDGE's shared platform package: the ntfy.sh push budget (notify), the trading-hours deploy fence (fence), the compose-rules .env reader (env), the duplicate-guarded spec registry (registry) and the FastAPI service kit (service)."
+version = "0.8.0"
+description = "EDGE's shared platform package: the ntfy.sh push budget (notify), the trading-hours deploy fence (fence), the compose-rules .env reader (env), the duplicate-guarded spec registry (registry), the FastAPI service kit (service) and shipped Windmill step templates (windmill)."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -52,6 +52,11 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "RUF"]
 ignore = ["E501", "RUF002", "RUF022"]
+
+[tool.ruff.lint.per-file-ignores]
+# Windmill infers a step's schema from main()'s signature; the shipped templates keep the
+# `param: dict = None` form every estate Windmill script uses (RUF013 would rewrite it).
+"edge_platform/windmill/templates/*.py" = ["RUF013"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

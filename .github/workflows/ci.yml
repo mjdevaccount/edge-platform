@@ -48,9 +48,15 @@ jobs:
           sh=$(uvx --from dist/edge_platform-*.whl edge-env path sh) && bash -n "$sh"
           # the [service] extra resolves from the wheel's own metadata and every tenant module imports
           whl=$(ls dist/edge_platform-*.whl)
-          uv run --isolated --no-project --with "${whl}[service]" python -c "import edge_platform.registry, edge_platform.service.db, edge_platform.service.lifespan, edge_platform.service.settings, edge_platform.service.timeline, edge_platform.service.flags, edge_platform.service.envelope, edge_platform.service.http_errors, edge_platform.service.auth, edge_platform.service.health, edge_platform.service.pg_identity"
+          uv run --isolated --no-project --with "${whl}[service]" python -c "import edge_platform.registry, edge_platform.service.db, edge_platform.service.lifespan, edge_platform.service.settings, edge_platform.service.timeline, edge_platform.service.flags, edge_platform.service.envelope, edge_platform.service.http_errors, edge_platform.service.auth, edge_platform.service.health, edge_platform.service.pg_identity, edge_platform.service.admin_run"
           # the registry is stdlib: importable from the BASE wheel, no extra
           uv run --isolated --no-project --with "${whl}" python -c "import edge_platform.registry"
+          # v0.8.0: the Windmill templates ship IN the wheel and copy out of it (base wheel, no extra)
+          tmp=$(mktemp -d)
+          uv run --isolated --no-project --with "${whl}" python -m edge_platform.windmill copy post_admin_run "$tmp" u/admin/post_admin_run
+          test -s "$tmp/u/admin/post_admin_run.py" && test -s "$tmp/u/admin/post_admin_run.script.lock"
+          grep -q '!inline u/admin/post_admin_run.script.lock' "$tmp/u/admin/post_admin_run.script.yaml"
+          uv run --isolated --no-project --with "${whl}" python -m edge_platform.windmill copy post_admin_run "$tmp" u/admin/post_admin_run --check
 
   gitleaks:
     name: gitleaks (secret scan)
