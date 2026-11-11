@@ -94,3 +94,50 @@ class Database:
         self.forget()
         if engine is not None:
             await engine.dispose()
+
+
+def statement_cache_args(env_name: str, default: int = 0) -> dict[str, int]:
+    """asyncpg's two prepared-statement caches, sized from `$<env_name>` (the NAME is the consumer's).
+
+    Behind pgbouncer in TRANSACTION pool mode, asyncpg's server-side prepared statements break at
+    random ("prepared statement __asyncpg_stmt_x__ does not exist") -- the documented fix is both
+    caches at 0, the default here. pgbouncer >= 1.21 with `max_prepared_statements` set tracks
+    protocol-level prepared statements and re-prepares them per server connection, so a container
+    whose pgbouncer is configured may opt IN by setting the variable. A non-integer value raises:
+    a cache size nobody can read is not silently 0."""
+    raw = (os.environ.get(env_name) or "").strip()
+    n = int(raw) if raw else default
+    if n < 0:
+        raise ValueError(f"{env_name}={n}: a statement cache size cannot be negative")
+    return {"statement_cache_size": n, "prepared_statement_cache_size": n}
+
+
+class _NoSavepoint:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+def savepoint(session: Any) -> Any:
+    """A SAVEPOINT on a SHARED session (SQLAlchemy `begin_nested`), so one caller's failed SQL rolls
+    back to the mark and the callers after it keep a live transaction.
+
+        for probe in probes:
+            try:
+                async with savepoint(session):
+                    await probe(session)
+            except Exception: ...
+
+    THE RULE IT ENFORCES: catching a SQL error does NOT un-abort a Postgres transaction. Every later
+    statement on that connection then fails with InFailedSQLTransactionError -- including
+    SQLAlchemy's own `SAVEPOINT sa_savepoint_N`, which is why the recovery has to be opened BEFORE
+    the failure, not after it. Any fan-out over one session needs this around each member.
+
+    A session without `begin_nested` gets a no-op, for test sentinels that stand in for a session
+    without being one. That fallback is deliberately more permissive than Postgres, so a containment
+    test must hand in a fake that HAS `begin_nested` and refuses it on an aborted transaction, the
+    way the database does."""
+    nested = getattr(session, "begin_nested", None)
+    return nested() if nested is not None else _NoSavepoint()

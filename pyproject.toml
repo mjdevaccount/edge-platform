@@ -1,7 +1,7 @@
 [project]
 name = "edge-platform"
-version = "0.6.0"
-description = "EDGE's shared platform package: the ntfy.sh push budget (notify), the trading-hours deploy fence (fence), the compose-rules .env reader (env) and the FastAPI service composition root (service)."
+version = "0.7.0"
+description = "EDGE's shared platform package: the ntfy.sh push budget (notify), the trading-hours deploy fence (fence), the compose-rules .env reader (env), the duplicate-guarded spec registry (registry) and the FastAPI service kit (service)."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

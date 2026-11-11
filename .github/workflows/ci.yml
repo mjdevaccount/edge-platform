@@ -48,7 +48,9 @@ jobs:
           sh=$(uvx --from dist/edge_platform-*.whl edge-env path sh) && bash -n "$sh"
           # the [service] extra resolves from the wheel's own metadata and every tenant module imports
           whl=$(ls dist/edge_platform-*.whl)
-          uv run --isolated --no-project --with "${whl}[service]" python -c "import edge_platform.service.db, edge_platform.service.lifespan, edge_platform.service.settings, edge_platform.service.timeline"
+          uv run --isolated --no-project --with "${whl}[service]" python -c "import edge_platform.registry, edge_platform.service.db, edge_platform.service.lifespan, edge_platform.service.settings, edge_platform.service.timeline, edge_platform.service.flags, edge_platform.service.envelope, edge_platform.service.http_errors, edge_platform.service.auth, edge_platform.service.health, edge_platform.service.pg_identity"
+          # the registry is stdlib: importable from the BASE wheel, no extra
+          uv run --isolated --no-project --with "${whl}" python -c "import edge_platform.registry"
 
   gitleaks:
     name: gitleaks (secret scan)
