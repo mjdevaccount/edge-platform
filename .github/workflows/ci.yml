@@ -71,6 +71,12 @@ jobs:
           # sqlalchemy there, so this also proves the runner never imports it); the two SQL stores need [sql]
           uv run --isolated --no-project --with "${whl}" python -c "import edge_platform.watch.spec, edge_platform.watch.runner, edge_platform.watch.pager, edge_platform.notify.pipeline, edge_platform.notify.types, edge_platform.notify.local, edge_platform.stamp, edge_platform.sqlkit"
           uv run --isolated --no-project --with "${whl}[sql]" python -c "import edge_platform.watch.state, edge_platform.notify.ledger"
+          # v0.11.0: the shared rate budget needs [sql]; the plugin loader + its conformance suite need
+          # [plugins] (the suite imports pytest lazily); typed config needs [service] (pydantic-settings)
+          uv run --isolated --no-project --with "${whl}[sql]" python -c "from edge_platform.budget import PgWindowBudget, Window, ddl; ddl('s.t')"
+          uv run --isolated --no-project --with "${whl}[plugins]" python -c "import edge_platform.plugins, edge_platform.testing.plugin_conformance"
+          uv run --isolated --no-project --with "${whl}[service]" python -c "import edge_platform.config, edge_platform.config.__main__"
+          uv run --isolated --no-project --with "${whl}" python -c "import edge_platform.lanes.spec, edge_platform.lanes.freshness, edge_platform.registry; edge_platform.registry.Registry('x').freeze()"
           # v0.8.0: the Windmill templates ship IN the wheel and copy out of it (base wheel, no extra)
           tmp=$(mktemp -d)
           uv run --isolated --no-project --with "${whl}" python -m edge_platform.windmill copy post_admin_run "$tmp" u/admin/post_admin_run

@@ -8,7 +8,7 @@ LIBRARY CHECKED: pyrate-limiter 4.5.1 `PostgresBucket`, NOT adopted for the shar
 only (a blocking call plus a second driver pool on an async path), runs `CREATE TABLE` from its
 constructor (DDL outside the migration ledger), falls back to LOCAL wall time when the DB clock
 fails (two processes disagree and both spend), turns lock contention into "over limit", and is a
-sliding log where vendors like Tradier count a FIXED window. pyrate-limiter's `InMemoryBucket` stays
+sliding log where many vendors count a FIXED window from the first request. pyrate-limiter's `InMemoryBucket` stays
 the per-process default in the consumer's HTTP port; this module is only the shared store.
 
 THE TABLE IS THE CONSUMER'S: the name is passed in (validated -- it is interpolated) and `ddl(table)`
