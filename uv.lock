@@ -357,7 +357,7 @@ postgres = [
 
 [[package]]
 name = "edge-platform"
-version = "0.10.0"
+version = "0.10.1"
 source = { editable = "." }
 dependencies = [
     { name = "pyyaml" },

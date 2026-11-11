@@ -1,6 +1,7 @@
 """The shipped post_admin_run template, run as Windmill runs it (its own module, `wmill` stubbed,
 `httpx.post` canned). Ported from trade-data tests/test_post_admin_run_fail_when.py, plus the PL3
-contract: service_url and key_variable are REQUIRED, and a missing one sends NOTHING."""
+contract: service_url is REQUIRED, key_variable is required whenever a key is sent (v0.10.1: not on a
+`send_key: false` step), and a missing one sends NOTHING."""
 
 from __future__ import annotations
 
@@ -90,6 +91,38 @@ def test_nulls_for_unlisted_inputs_take_the_defaults(step) -> None:
 def test_send_key_false_presents_no_key(step) -> None:
     _run(step, send_key=False)
     assert step.sent["headers"] is None
+
+
+@pytest.mark.parametrize("value", [None, "", "  "])
+def test_a_keyless_step_needs_no_key_variable_and_posts_unauthenticated(step, value) -> None:
+    """v0.10.1: trade-quant's flows share trade-data's copy with `send_key: false` and no
+    key_variable; v0.10.0 raised on every one of them. No key named, none read, none sent."""
+    step.variables.clear()  # any read of a variable would raise LookupError -> fail-open print
+    assert step.main(URL, value, "backfill_ohlcv", send_key=False) == {"ok": True}
+    assert step.sent["url"] == "http://svc:8090/admin/run/backfill_ohlcv"
+    assert step.sent["headers"] is None
+
+
+def test_a_keyless_step_never_reads_a_key_variable_it_was_given(step, capsys) -> None:
+    step.variables[KEYVAR] = RuntimeError("must not be read")  # a read would print the fail-open line
+    _run(step, send_key=False)
+    assert step.sent["headers"] is None and capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("key_variable", [KEYVAR, None])
+def test_require_key_with_send_key_false_is_a_config_error_and_sends_nothing(step, key_variable) -> None:
+    """Fail closed on a key it will never send: refused before any request, not a silent keyless post."""
+    with pytest.raises(ValueError, match="require_key is set but send_key is false"):
+        step.main(URL, key_variable, "probe", send_key=False, require_key=True)
+    assert step.sent == {}
+
+
+@pytest.mark.parametrize("send_key", [True, None])
+@pytest.mark.parametrize("value", [None, ""])
+def test_a_keyed_step_still_refuses_a_missing_key_variable(step, send_key, value) -> None:
+    with pytest.raises(ValueError, match="'key_variable' is required"):
+        step.main(URL, value, "probe", send_key=send_key)
+    assert step.sent == {}
 
 
 def test_an_empty_key_is_fail_open_by_default_and_closed_on_require_key(step, capsys) -> None:
