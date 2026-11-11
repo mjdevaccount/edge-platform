@@ -228,3 +228,53 @@ def test_the_catalog_lists_every_knob_with_its_class() -> None:
         "| t_risk | `T_RISK_LOSS_LIMIT_R` | tunable | `3.0` | R | Daily loss at which new entries halt. | t.decisions |"
         in text
     )
+
+
+# --- review of PR #18: the names the first pattern missed, and credentials INSIDE a value ----------
+
+MISSED = [
+    "LITELLM_MASTER_KEY",
+    "LANGFUSE_ENCRYPTION_KEY",
+    "CADDY_BASIC_AUTH_PLAINTEXT",
+    "LANGFUSE_REDIS_AUTH",
+    "BACKUP_S3_ACCESS_KEY_ID",
+    "DATABASE_URL",
+]
+
+
+def _one(env: str, cls: KnobClass, default: str = "x") -> type[Domain]:
+    class _D(Domain):
+        domain = "t_one"
+        value: str = knob(default, cls=cls, env=env, doc="One knob.")
+
+    return _D
+
+
+@pytest.mark.parametrize("env", MISSED)
+def test_every_credential_name_the_estate_uses_must_be_classed_secret(env: str) -> None:
+    found = lint([_one(env, KnobClass.TOPOLOGY)])
+    assert any(f"{env} looks like a credential" in f for f in found), found
+
+
+@pytest.mark.parametrize("env", ["T_RISK_HOST", "T_MONKEY_COUNT", "T_KEYBOARD_LAYOUT", "T_UPSTREAM_URL"])
+def test_an_ordinary_name_is_not_called_a_credential(env: str) -> None:
+    assert lint([_one(env, KnobClass.TOPOLOGY)]) == []
+
+
+def test_url_credentials_never_render_whatever_the_knob_is_called(caplog, monkeypatch) -> None:
+    canary = "pw-0b7e-never-render-me"
+    monkeypatch.setenv("T_UPSTREAM_URL", f"postgresql://trade:{canary}@db:5432/trade")
+    dom = _one("T_UPSTREAM_URL", KnobClass.TOPOLOGY)
+    boot: list = []
+    with caplog.at_level(logging.INFO, logger="edge_platform.config"):
+        d = load_all([dom], on_boot=boot.append)["t_one"]
+    assert canary in d.value  # the code that connects still gets the real value
+    for out in (caplog.text, repr(boot), repr(effective(d))):
+        assert canary not in out
+    assert "postgresql://***@db:5432/trade" in caplog.text  # host and db stay readable
+
+
+def test_a_url_credential_in_a_default_is_a_lint_finding_both_ways() -> None:
+    leaky = _one("T_UPSTREAM_URL", KnobClass.TOPOLOGY, default="https://user:pw@vendor.example/api")
+    assert any("carries URL credentials" in f for f in lint([leaky]))
+    assert lint([_one("T_UPSTREAM_URL", KnobClass.TOPOLOGY, default="https://vendor.example/api")]) == []

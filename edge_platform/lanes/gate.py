@@ -6,10 +6,13 @@ library owns no table): `read_disabled(session)` returns the ids an operator swi
 sweep makes). `mirror` names the switch table in every reason, so a daemon log line, a worklist's
 blocked marker and a decision card all say the same thing.
 
-v0.11 (M6 PL9): `input_absent` CALLS `freshness.judge`, so the gate and the page can never disagree.
-v0.9 compared a wall-hours age with `cadence_h`, so a session-clock lane read "absent" every night
-and every weekend. The limit is now the lane's own (`due_h`, else the wall rule), counted on the
-lane's own clock.
+v0.11 (M6 PL9): `input_absent` CALLS `freshness.judge`. v0.9 compared a wall-hours age with
+`cadence_h`, so a session-clock lane read "absent" every night and every weekend. A lane that
+declares `due_h` is now gated on exactly the page's limit, counted on its own clock (a non-wall lane
+must declare one). A lane WITHOUT `due_h` keeps the v0.9 limit -- `cadence_h` wall hours -- because
+the page's undeclared rule (ttl x3 / ttl+24h, 36h floor) is a paging threshold, not an input-
+presence one: on it, an hourly lane whose newest output is 20h old reads "present". The gate fails
+closed; declare `due_h` to widen it.
 
 BEST-EFFORT BY CONSTRUCTION. An unreadable switch table (a restore, an unapplied migration) reads as
 NOTHING disabled -- a control table must never black out the pipeline -- but never silently: a
@@ -103,10 +106,22 @@ class SourceGate:
             obs = await self._observe(session, spec)
             if obs.newest_output is None:
                 return f"{spec.freshness_key} has no readable rows"
-            j = judge(spec, obs, now=self._now())
-            if j.age_h is not None and j.limit_h is not None and j.age_h <= j.limit_h:
-                return None  # inside its own limit, on its own clock (held / abstaining included)
-            return f"{spec.freshness_key} {j.state}: {j.why}"
+            now = self._now()
+            j = judge(spec, obs, now=now)
+            if j.age_h is None or j.limit_h is None:
+                return f"{spec.freshness_key} {j.state}: {j.why}"  # unmeasurable is not present
+            if spec.due_h is not None:
+                if j.age_h <= j.limit_h:
+                    return None  # inside its declared limit, on its own clock (held / abstaining included)
+                return f"{spec.freshness_key} {j.state}: {j.why}"
+            # No due_h: the stricter v0.9 limit (fail closed), never the page's 36h-floor rule.
+            age_wall = (now - obs.newest_output).total_seconds() / 3600.0
+            if spec.cadence_h is not None and age_wall <= spec.cadence_h:
+                return None
+            return (
+                f"{spec.freshness_key} newest write {age_wall:.1f}h ago > cadence {spec.cadence_h:g}h -- the "
+                f"gate's limit with no due_h declared (the page reads {j.state}: {j.why})"
+            )
         except Exception as exc:
             with contextlib.suppress(Exception):
                 await session.rollback()

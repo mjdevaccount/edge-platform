@@ -18,8 +18,29 @@ from .knobs import FINGERPRINTED, MASK, ConfigError, Domain, KnobClass, Source, 
 
 log = logging.getLogger("edge_platform.config")
 
-#: names that look like credentials; such a knob must be classed SECRET (invariant 10)
-SECRET_LOOKING = re.compile(r"(SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|CREDENTIAL|DSN|DB_URL)")
+#: names that look like credentials; such a knob must be classed SECRET (invariant 10). Wide on
+#: purpose -- a false positive is a lint line to re-class, a miss is a credential in the boot log.
+#: `KEY` as a final word (LITELLM_MASTER_KEY, LANGFUSE_ENCRYPTION_KEY) or `KEY_ID`
+#: (BACKUP_S3_ACCESS_KEY_ID), any `AUTH` (LANGFUSE_REDIS_AUTH, CADDY_BASIC_AUTH_PLAINTEXT), and a
+#: connection string by name (DATABASE_URL, *_DSN).
+SECRET_LOOKING = re.compile(
+    r"(SECRET|TOKEN|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|AUTH|PLAINTEXT|PRIVATE_KEY|API_KEY|KEY_ID"
+    r"|(?:^|_)KEY$|DSN|DB_URL|DATABASE_URL)"
+)
+#: `scheme://<userinfo>@` -- a credential carried INSIDE a value, whatever the knob is called
+_USERINFO = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*://)[^/@\s]+@")
+
+
+def redact_userinfo(v: Any) -> Any:
+    """Mask the userinfo of every `scheme://user:pass@host` inside a rendered value (str, list, dict),
+    regardless of the knob's name or class: `postgresql://u:pw@h/db` -> `postgresql://***@h/db`."""
+    if isinstance(v, str):
+        return _USERINFO.sub(rf"\1{MASK}@", v)
+    if isinstance(v, list):
+        return [redact_userinfo(x) for x in v]
+    if isinstance(v, dict):
+        return {k: redact_userinfo(x) for k, x in v.items()}
+    return v
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +66,7 @@ class Overrides(Protocol):
 def _jsonable(v: Any) -> Any:
     if isinstance(v, (SecretStr, SecretBytes)):
         return MASK
-    return TypeAdapter(Any).dump_python(v, mode="json")
+    return redact_userinfo(TypeAdapter(Any).dump_python(v, mode="json"))
 
 
 def _default(info: Any) -> Any:
@@ -131,6 +152,10 @@ def lint(domains: Sequence[type[Domain]]) -> list[str]:
             secret = m["cls"] == KnobClass.SECRET
             if SECRET_LOOKING.search(env) and not secret:
                 findings.append(f"{where}: {env} looks like a credential but is classed {m['cls']}")
+            dflt = _default(info)
+            if not secret and isinstance(dflt, str) and _USERINFO.search(dflt):
+                findings.append(f"{where}: its default carries URL credentials (scheme://user:pass@) but is "
+                                f"classed {m['cls']}")  # fmt: skip
             typed_secret = "Secret" in repr(info.annotation)
             if secret and not typed_secret:
                 findings.append(f"{where}: a SECRET knob must be typed SecretStr")

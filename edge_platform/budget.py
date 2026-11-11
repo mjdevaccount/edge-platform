@@ -17,21 +17,27 @@ returns the shape, which the consumer ships as a numbered migration. Nothing her
 INVARIANTS
 - The DB clock is the only clock: every decision reads `clock_timestamp()` ONCE per statement. No
   local-time fallback.
-- One statement per attempt (autocommit, row lock only). Waiting holds no connection: the sleep is
-  outside any transaction, and a refused attempt re-asks after the window the DB names.
+- One decision statement per attempt (row lock only), in a transaction whose `lock_timeout` /
+  `statement_timeout` are set LOCAL to the caller's remaining `max_wait` -- a row lock held by
+  someone else past it is `BudgetUnavailable`, never an unbounded block. Waiting holds no
+  connection: the sleep is outside any transaction (with a little jitter so waiters do not wake in
+  lockstep), and a refused attempt re-asks after the window the DB names.
 - FAILS CLOSED: a store error raises `BudgetUnavailable` -- never a silent grant. There is no default
   fallback; a lane that must not stop on a Postgres blip wraps this in an explicit fallback at its
   composition root and reports every fallback use.
 - The vendor's counter wins: `observe()` keeps the latest vendor reading, `flush_observed()` writes
   `used = GREATEST(used, vendor_used)` and the vendor's reset time, which becomes the window end. A
   reading with `available == 0` (the vendor refused) pins `used = capacity` until that reset.
+- ...but only for a window that is still open: a reading whose reset is already past on the DB clock
+  merges NOTHING (`stats.flush_stale`), and a reset is clamped to `RESET_HORIZON_PERIODS` of the
+  row's period (`observe` also drops one past it on the local clock, counted `observe_invalid`).
 - capacity / period disagreeing between processes: last writer wins on the row, a WARNING names both
   values, and `stats.config_conflict` counts it.
 
 TELEMETRY (what fails silently, where it lands): `stats` holds the per-process counters --
 wait_seconds / wait_events (a starved lane), exhausted / unavailable (a lane refused, or the store
 down), observe_invalid (malformed vendor headers ignored), flush_failed (the vendor reading did not
-land), config_conflict -- and `stats.series()` renders them as `budget_*_total{key}` for the
+land), flush_stale (a reading that arrived after its window closed), config_conflict -- and `stats.series()` renders them as `budget_*_total{key}` for the
 consumer's textfile / exporter. The ROW is the outside view: `updated_at` stale while the lane should
 be spending means nothing is drawing (a guard nothing invokes); vendor used above ours means an
 unmetered caller exists. Watching the row is the consumer's watchdog.
@@ -42,6 +48,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import random
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
@@ -56,6 +63,24 @@ log = logging.getLogger("edge_platform.budget")
 
 #: a refused insert race (two processes creating the row at once) re-asks at once, this many times
 _CONFLICT_RETRIES = 5
+#: A vendor reset is believed at most this many of the row's own periods ahead (the flush clamps to
+#: it on the DB clock; `observe` drops a reset past it). 2 = one full vendor window plus one of slack
+#: for a vendor window that started before ours. A header saying 2099 would otherwise pin the bucket
+#: forever. A vendor window genuinely longer than this means `Window.period_s` is wrong -- model the
+#: vendor's period.
+RESET_HORIZON_PERIODS = 2
+#: `observe` checks the horizon on the LOCAL clock (the DB clamp is the authority); this much skew is
+#: tolerated before a reset is called implausible.
+_OBSERVE_SKEW_S = 300.0
+#: Earliest plausible reset: anything before is a unit/parse error (seconds read as ms -> 1970).
+_EPOCH_FLOOR = dt.datetime(2000, 1, 1, tzinfo=dt.UTC)
+#: Postgres `lock_timeout = 0` means NO timeout, so a remaining wait of ~0 still gets this floor.
+_MIN_LOCK_MS = 50
+#: `statement_timeout` = the lock budget plus this (the statement itself, once it holds the lock).
+_STMT_SLACK_MS = 1000
+#: A flush has no caller-side max_wait; it waits this long for the row lock, then counts a failure.
+_FLUSH_LOCK_S = 2.0
+_TIMEOUTS = text("SELECT set_config('lock_timeout', :lock, true), set_config('statement_timeout', :stmt, true)")
 
 
 def ddl(table: str) -> str:
@@ -116,6 +141,7 @@ class BudgetStats:
     unavailable: int = 0
     observe_invalid: int = 0
     flush_failed: int = 0
+    flush_stale: int = 0
     config_conflict: int = 0
 
     def series(self, key: str) -> list[tuple[str, dict[str, str], float]]:
@@ -171,10 +197,24 @@ SELECT granted, wait_s, prior_cap, prior_period FROM upd
 UNION ALL SELECT granted, wait_s, prior_cap, prior_period FROM ins
 """
 
+# One statement, one clock reading. A reading whose reset is ALREADY PAST (a late / retried flush, a
+# response from the previous vendor window landing after the row rolled, a seconds-vs-ms parse
+# landing in 1970) describes a window that is over: it merges NOTHING -- no `used`, no refusal pin,
+# no reset -- or the next acquire would roll the window on it and zero `used` mid-window. A reset
+# further out than `RESET_HORIZON_PERIODS` of the row's own period is clamped to that horizon, so a
+# bad header (year 2099) cannot pin the bucket forever. `stale` reports the dropped case.
 _FLUSH = """
-UPDATE {t} SET used = GREATEST(used, coalesce(:vu, 0), CASE WHEN :refused THEN capacity ELSE 0 END),
-               vendor_resets_at = coalesce(:resets, vendor_resets_at), updated_at = clock_timestamp()
-WHERE key = :key
+WITH n AS (SELECT clock_timestamp() AS t, CAST(:resets AS timestamptz) AS r)
+UPDATE {t} b
+   SET used = CASE WHEN n.r <= n.t THEN b.used
+                   ELSE GREATEST(b.used, coalesce(CAST(:vu AS integer), 0),
+                                 CASE WHEN CAST(:refused AS boolean) THEN b.capacity ELSE 0 END) END,
+       vendor_resets_at = CASE WHEN n.r IS NULL OR n.r <= n.t THEN b.vendor_resets_at
+                               ELSE LEAST(n.r, n.t + make_interval(secs => :horizon * b.period_s)) END,
+       updated_at = n.t
+  FROM n
+ WHERE b.key = :key
+RETURNING coalesce(n.r <= n.t, false) AS stale
 """
 
 
@@ -192,6 +232,7 @@ class PgWindowBudget:
         on_wait: Callable[[str, float], None] | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         min_flush_interval_s: float = 1.0,
+        jitter_s: float = 0.05,
     ) -> None:
         if not isinstance(key, str) or not key.strip():
             raise ValueError("PgWindowBudget needs a non-empty account key")
@@ -204,6 +245,7 @@ class PgWindowBudget:
         self._flush_sql = text(_FLUSH.format(t=qualified(table, "budget table")))
         self._max_wait, self._on_wait, self._sleep = float(max_wait), on_wait, sleep
         self._min_flush, self._last_flush = float(min_flush_interval_s), float("-inf")
+        self._jitter = max(float(jitter_s), 0.0)
         self._pending: _Reading | None = None
         self._conflicts_seen: set[tuple[int, int]] = set()
         self.stats = BudgetStats()
@@ -219,7 +261,7 @@ class PgWindowBudget:
             raise ValueError(f"weight {weight} can never fit capacity {self._window.capacity} ({self._key})")
         waited, conflicts = 0.0, 0
         while True:
-            row = await self._attempt(weight)
+            row = await self._attempt(weight, self._max_wait - waited)
             if row is None:  # lost the create race: the row exists now, ask again
                 conflicts += 1
                 if conflicts > _CONFLICT_RETRIES:
@@ -242,13 +284,27 @@ class PgWindowBudget:
                     self._on_wait(self._key, wait_s)
                 except Exception:  # a broken telemetry hook must not become the failure
                     log.warning("budget_on_wait_hook_failed key=%s", self._key, exc_info=True)
-            await self._sleep(wait_s)
-            waited += wait_s
+            # Every waiter is told the same window end: a little jitter (inside max_wait) spreads the
+            # wake so N processes do not queue on the row lock in the same millisecond.
+            spread = min(self._jitter, self._max_wait - waited - wait_s)
+            nap = wait_s + (random.uniform(0.0, spread) if spread > 0 else 0.0)
+            await self._sleep(nap)
+            waited += nap
 
-    async def _attempt(self, weight: int) -> tuple[bool, float, int | None, int | None] | None:
+    @staticmethod
+    async def _bound(s: Any, budget_s: float) -> None:
+        """Bound THIS transaction's lock wait by `budget_s` (set_config(..., true) = SET LOCAL:
+        transaction-scoped, so safe behind pgbouncer transaction pooling). A row lock held past it
+        raises -- mapped to BudgetUnavailable by the caller -- instead of blocking a `max_wait=0.5`
+        caller for as long as the holder likes."""
+        lock_ms = max(int(budget_s * 1000), _MIN_LOCK_MS)
+        await s.execute(_TIMEOUTS, {"lock": f"{lock_ms}ms", "stmt": f"{lock_ms + _STMT_SLACK_MS}ms"})
+
+    async def _attempt(self, weight: int, remaining_s: float) -> tuple[bool, float, int | None, int | None] | None:
         params = {"key": self._key, "w": weight, "cap": self._window.capacity, "period": self._window.period_s}
         try:
             async with self._sessions() as s:
+                await self._bound(s, remaining_s)
                 rows = (await s.execute(self._acquire_sql, params)).all()
                 await s.commit()
         except Exception as exc:
@@ -286,15 +342,27 @@ class PgWindowBudget:
             if used is None and avail is None:
                 raise ValueError("no counter")
             refused = avail == 0
-            if refused and resets is None:
-                raise ValueError("a refusal with no reset time would pin the bucket forever")
+            implausible = resets is not None and not self._plausible_reset(resets)
+            if refused and (resets is None or implausible):
+                raise ValueError("a refusal with no believable reset time would pin the bucket forever")
         except Exception:
             self.stats.observe_invalid += 1
             return
+        if implausible:  # keep the counter, drop the reset (the flush would clamp it anyway): counted
+            self.stats.observe_invalid += 1
+            resets = None
         prev = self._pending
-        if prev is not None and prev.refused and not refused:
-            refused, resets = True, resets or prev.resets_at  # a refusal is not erased by a later reading
+        # A refusal is not erased by a later reading FROM THE SAME VENDOR WINDOW (no reset, or one no
+        # later than the refusal's). A reading with a LATER reset is the next window: the refusal is
+        # over, and carrying it would pin the fresh window under the new reset.
+        if prev is not None and prev.refused and not refused and (resets is None or resets <= prev.resets_at):
+            refused, resets = True, prev.resets_at
         self._pending = _Reading(used, resets, refused)
+
+    def _plausible_reset(self, resets: dt.datetime) -> bool:
+        """A sanity check on the LOCAL clock; the flush's clamp on the DB clock is the authority."""
+        horizon = RESET_HORIZON_PERIODS * self._window.period_s + _OBSERVE_SKEW_S
+        return _EPOCH_FLOOR <= resets <= dt.datetime.now(dt.UTC) + dt.timedelta(seconds=horizon)
 
     async def flush_observed(self, *, force: bool = False) -> bool:
         """Write the pending vendor reading to the row (at most once per `min_flush_interval_s`, a
@@ -306,10 +374,12 @@ class PgWindowBudget:
         now = time.monotonic()
         if not (force or r.refused) and now - self._last_flush < self._min_flush:
             return False
-        params = {"key": self._key, "vu": r.used, "refused": r.refused, "resets": r.resets_at}
+        params = {"key": self._key, "vu": r.used, "refused": r.refused, "resets": r.resets_at,
+                  "horizon": RESET_HORIZON_PERIODS}  # fmt: skip
         try:
             async with self._sessions() as s:
-                await s.execute(self._flush_sql, params)
+                await self._bound(s, _FLUSH_LOCK_S)
+                stale = (await s.execute(self._flush_sql, params)).scalar()
                 await s.commit()
         except Exception as exc:
             self.stats.flush_failed += 1
@@ -318,4 +388,7 @@ class PgWindowBudget:
         if self._pending is r:
             self._pending = None
         self._last_flush = now
+        if stale:  # the reading's window was already over when it landed: it merged nothing
+            self.stats.flush_stale += 1
+            log.info("budget_flush_stale key=%s resets_at=%s", self._key, r.resets_at)
         return True

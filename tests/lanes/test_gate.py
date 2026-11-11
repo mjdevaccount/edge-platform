@@ -120,10 +120,12 @@ def test_input_absent_has_a_reason_for_each_branch(gate, world) -> None:
     world.disabled = []
     world.newest = None
     assert "no readable rows" in (_run(gate.input_absent(s, "walter")) or "")
-    # cadence 100h -> the judge's wall limit is min(300, 124) = 124h, the SAME limit the page uses
+    # cadence 100h, no due_h -> the gate holds cadence_h (v0.9), NOT the page's min(300, 124) = 124h
     world.newest = NOW - dt.timedelta(hours=125)
     assert "STOPPED" in (_run(gate.input_absent(s, "walter")) or "")  # its last run is as old as its output
-    world.newest = NOW - dt.timedelta(hours=123)
+    world.newest = NOW - dt.timedelta(hours=101)
+    assert "> cadence 100h" in (_run(gate.input_absent(s, "walter")) or "")  # page: ok; gate: absent
+    world.newest = NOW - dt.timedelta(hours=99)
     assert _run(gate.input_absent(s, "walter")) is None
     world.raise_probe = True
     assert "unreadable" in (_run(gate.input_absent(s, "walter")) or "")
@@ -156,3 +158,39 @@ def test_a_session_lane_overnight_is_present_and_the_wall_hours_bug_is_gone(worl
     assert _run(g.input_absent(_Session(), "board_wall")) is not None  # v0.9 wall model: absent every night
     monday = _gate(world, gated, now=lambda: et(2026, 11, 9, 9, 50))  # 20 session-minutes in, no run
     assert "STOPPED" in (_run(monday.input_absent(_Session(), "board")) or "")
+
+
+# --- review of PR #18: an undeclared limit fails CLOSED at the gate ------------------------------
+
+
+class _Hourly(_World):
+    """An hourly lane that RUNS (last run 5 minutes ago) but whose newest output is old."""
+
+    def __init__(self, output_age_h: float) -> None:
+        super().__init__()
+        self.output_age_h = output_age_h
+
+    async def observe(self, _s, spec: LaneSpec) -> Observation:
+        return Observation(newest_output=NOW - dt.timedelta(hours=self.output_age_h),
+                           last_run=NOW - dt.timedelta(minutes=5), last_status="ok", runs=500,
+                           registered_at=NOW - dt.timedelta(days=30))  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("output_age_h", "due_h", "absent"),
+    [
+        (20.0, None, True),  # v0.11-rc: present (page limit 36h floor); v0.9 + trade-data main: absent
+        (0.5, None, False),  # inside its cadence: present
+        (20.0, 24.0, False),  # a DECLARED due_h is the gate's limit too: present, same as the page
+        (25.0, 24.0, True),  # ...and past it, absent
+    ],
+)
+def test_an_hourly_lane_with_old_output_is_absent_unless_a_due_h_says_otherwise(
+    output_age_h: float, due_h: float | None, absent: bool
+) -> None:
+    world = _Hourly(output_age_h)
+    g = _gate(world, _walter(id="hourly", cadence_h=1.0, due_h=due_h))
+    reason = _run(g.input_absent(_Session(), "hourly"))
+    assert (reason is not None) is absent, reason
+    if absent and due_h is None:
+        assert "> cadence 1h" in reason and "no due_h" in reason

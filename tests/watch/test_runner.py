@@ -502,3 +502,25 @@ def test_the_sql_store_refuses_an_unqualified_table() -> None:
 def test_now_defaults_to_the_injected_clock() -> None:
     rig = Rig(now=lambda: dt.datetime(2026, 8, 11, 12, 0, tzinfo=dt.UTC))
     assert run(rig.runner.run(object()))["now"] == "2026-08-11T12:00:00+00:00"
+
+
+# --- review of PR #18: a dead plane must not exit 0 ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("result", "code"),
+    [
+        ({"results": [], "blind": []}, 2),  # an empty sweep looked at nothing: an import failure, not clean
+        ({"blind": []}, 2),
+        ({"results": [{"status": "unknown"}], "blind": []}, 2),  # an UNKNOWN row, even with blind unset
+        ({"results": [{"status": "ok"}], "blind": [], "stale": ["t-old"]}, 2),  # nothing swept it lately
+        ({"results": [{"status": "ok"}, {"status": "idle"}], "blind": [], "stale": []}, 0),
+        ({"results": [{"status": "down"}], "blind": [], "stale": []}, 1),
+    ],
+)
+def test_exit_code_is_2_whenever_the_plane_did_not_finish_looking(result: dict, code: int) -> None:
+    assert wr.exit_code(result) == code
+
+
+def test_an_empty_registry_sweep_exits_2() -> None:
+    assert wr.exit_code(run(Rig().runner.run(object(), now=now()))) == 2

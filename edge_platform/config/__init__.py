@@ -37,7 +37,18 @@ exit 0 clean, 1 findings or drift, 2 could not load the domains or run.
 """
 
 from .knobs import FINGERPRINTED, MASK, ConfigError, Domain, KnobClass, Source, knob
-from .render import SECRET_LOOKING, Effective, Overrides, catalog, effective, fingerprint, lint, load_all, schema
+from .render import (
+    SECRET_LOOKING,
+    Effective,
+    Overrides,
+    catalog,
+    effective,
+    fingerprint,
+    lint,
+    load_all,
+    redact_userinfo,
+    schema,
+)
 
 __all__ = [
     "FINGERPRINTED",
@@ -55,5 +66,6 @@ __all__ = [
     "knob",
     "lint",
     "load_all",
+    "redact_userinfo",
     "schema",
 ]

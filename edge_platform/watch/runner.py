@@ -75,13 +75,18 @@ UNKNOWN_AFTER = 3
 
 
 def exit_code(result: dict[str, Any]) -> int:
-    """The CLI contract for one sweep's result: 2 = did not finish looking (a probe that could not
-    judge, i.e. any UNKNOWN), 1 = findings (WARN/DOWN), 0 = clean. A crashed detector must never
-    exit 0, and must not be confused with a finding."""
-    if result.get("blind"):
+    """The CLI contract for one sweep's (or one stored read's) result: 2 = did not finish looking,
+    1 = findings (WARN/DOWN), 0 = clean. "Did not finish looking" is ANY of: no results at all (an
+    empty registry is an import failure, never a clean plane), a `blind` id, any row whose status is
+    UNKNOWN, or any `stale` verdict (a stored read over a plane nothing has swept). A crashed
+    detector must never exit 0, and must not be confused with a finding."""
+    results = list(result.get("results") or ())
+    if not results or result.get("blind") or result.get("stale"):
+        return 2
+    if any(r.get("status") == Status.UNKNOWN.value for r in results):
         return 2
     failing = {s.value for s in FAILING}
-    return 1 if any(r.get("status") in failing for r in result.get("results", ())) else 0
+    return 1 if any(r.get("status") in failing for r in results) else 0
 
 
 def _unknown_runs(prior: dict[str, Any]) -> int:
@@ -93,6 +98,14 @@ def _unknown_runs(prior: dict[str, Any]) -> int:
         return int((prior.get("last_metrics") or {}).get("unknown_runs") or 1) + 1
     except (TypeError, ValueError):
         return 2  # stored before the counter existed: at least this one and the last
+
+
+def _stored_streak(metrics: Any) -> int:
+    """The UNKNOWN streak a stored row recorded (0 when it recorded none, or garbage)."""
+    try:
+        return int((metrics or {}).get("unknown_runs") or 0)
+    except (TypeError, ValueError, AttributeError):
+        return 0
 
 
 class StateStore(Protocol):
@@ -443,8 +456,12 @@ class WatchRunner:
         stale = [r["id"] for r in results if r["stale"]]
         if stale:
             log.warning("watchdog_verdicts_stale ids=%s stale_after_s=%s", stale, self.stale_after_s)
+        # The same two lists the live sweep returns, derived from the stored rows -- hard-coding them
+        # empty made `exit_code(read_stored(...))` 0 on a plane whose every probe had crashed.
+        blind = [r["id"] for r in results if r["status"] == Status.UNKNOWN.value]
+        stuck = [r["id"] for r in results if r["id"] in blind and _stored_streak(r["metrics"]) >= self.unknown_after]
         return {
             "now": now.isoformat(), "session_day": session_day, "source": "stored",
             "stale_after_s": self.stale_after_s, "stale": stale, "results": results, "paged": [],
-            "contended": [], "blind": [], "stuck_unknown": [],
+            "contended": [], "blind": blind, "stuck_unknown": stuck,
         }  # fmt: skip
