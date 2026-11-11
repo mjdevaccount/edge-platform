@@ -15,11 +15,15 @@ references it by PATH, with no body of its own:
           kind: {type: static, value: auto_tag}
           params: {type: javascript, expr: "({symbol: flow_input.symbol ?? 'SPY'})"}
 
-THE SERVICE AND ITS KEY ARE REQUIRED INPUTS. The trade-data copy defaulted both (its caddy URL, its
-key variable), so a step that forgot them called trade-data with trade-data's key -- the wrong
-service, or the right one anonymously, and green either way. Windmill passes null for every input a
-step does not list, so "required" is enforced HERE at run time, not only in the schema: a missing or
-blank `service_url` or `key_variable` raises before any request is sent.
+THE SERVICE IS A REQUIRED INPUT, AND SO IS ITS KEY WHENEVER A KEY IS SENT. The trade-data copy
+defaulted both (its caddy URL, its key variable), so a step that forgot them called trade-data with
+trade-data's key -- the wrong service, or the right one anonymously, and green either way. Windmill
+passes null for every input a step does not list, so "required" is enforced HERE at run time, not
+only in the schema: a missing or blank `service_url` raises before any request is sent, and so does
+a blank `key_variable` unless the step says `send_key: false`. A `send_key: false` step names a
+service that verifies no key, so it has no key to name (v0.10.1: v0.10.0 demanded one anyway and
+would have failed every keyless flow sharing the script, e.g. trade-quant's in trade-data's
+workspace); any `key_variable` it passes is ignored, never read.
 
 WHAT IT KEEPS, on purpose:
 
@@ -91,8 +95,8 @@ def auth_headers(key_variable, require_key=False):
 
 def main(
     service_url: str,
-    key_variable: str,
-    kind: str,
+    key_variable: str = None,  # required unless send_key is false; checked below, not by the signature
+    kind: str = None,  # required (checked below); a default only because key_variable now has one
     params: dict = None,
     body: dict = None,
     timeout: float = DEFAULT_TIMEOUT,
@@ -102,15 +106,16 @@ def main(
     fail_when: dict = None,
 ):
     service_url = _required("service_url", service_url).rstrip("/")
-    key_variable = _required("key_variable", key_variable)
+    # `is not False` / `is True`, never truthiness: an unlisted input's null keeps the safe default.
+    send_key = send_key is not False
+    require_key = require_key is True
+    # The key's variable is required exactly when a key is sent; a keyless step never reads one.
+    key_variable = _required("key_variable", key_variable) if send_key else None
     kind = _required("kind", kind)
     # A step's OMITTED argument arrives as None, not as the default, so each default is applied here
     # from the constant the signature names (the first trade-data sync posted to '/None/admin/run/...').
     route = _or_default(route, DEFAULT_ROUTE)
     timeout = _or_default(timeout, DEFAULT_TIMEOUT)
-    # `is not False` / `is True`, never truthiness: an unlisted input's null keeps the safe default.
-    send_key = send_key is not False
-    require_key = require_key is True
     r = httpx.post(
         f"{service_url}{route}/{kind}",
         params=_sent(params),

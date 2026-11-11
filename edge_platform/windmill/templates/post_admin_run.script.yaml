@@ -1,6 +1,7 @@
 summary: POST one <service>/admin/run/<kind> (the shared flow step, edge-platform template)
-description: Referenced by path from a flow module (type script). service_url and
-  key_variable are REQUIRED (no default service, no default key). Keeps the response
+description: Referenced by path from a flow module (type script). service_url is
+  REQUIRED (no default service); key_variable is required unless send_key is false
+  (no default key; a keyless step names none). Keeps the response
   body on failure so a 503 shed stays a managed skip; drops None/blank params;
   fail_when fails a 200 whose body says it failed. Source of truth edge-platform
   edge_platform/windmill/templates/post_admin_run.py.
@@ -15,7 +16,8 @@ schema:
       description: the service base URL, e.g. http://my-service:8090 (required, no default)
     key_variable:
       type: string
-      description: the Windmill variable path holding the service's X-API-Key (required, no default)
+      description: the Windmill variable path holding the service's X-API-Key (required when
+        send_key is true; ignored when false; no default)
     kind:
       type: string
       description: the /admin/run/<kind> segment
@@ -51,5 +53,4 @@ schema:
       default: null
   required:
     - service_url
-    - key_variable
     - kind
