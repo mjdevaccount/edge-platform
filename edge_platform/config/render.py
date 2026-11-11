@@ -18,14 +18,14 @@ from .knobs import FINGERPRINTED, MASK, ConfigError, Domain, KnobClass, Source, 
 
 log = logging.getLogger("edge_platform.config")
 
-#: names that look like credentials; such a knob must be classed SECRET (invariant 10). Wide on
-#: purpose -- a false positive is a lint line to re-class, a miss is a credential in the boot log.
-#: `KEY` as a final word (LITELLM_MASTER_KEY, LANGFUSE_ENCRYPTION_KEY) or `KEY_ID`
-#: (BACKUP_S3_ACCESS_KEY_ID), any `AUTH` (LANGFUSE_REDIS_AUTH, CADDY_BASIC_AUTH_PLAINTEXT), and a
-#: connection string by name (DATABASE_URL, *_DSN).
+#: names that look like credentials; such a knob must be classed SECRET (invariant 10), or declare
+#: `knob(not_secret="<why>")`. `KEY` as the final word (LITELLM_MASTER_KEY, LANGFUSE_ENCRYPTION_KEY)
+#: except PUBLIC_KEY, `KEY_ID` (BACKUP_S3_ACCESS_KEY_ID), `AUTH` as the final word or a basic-auth /
+#: auth-token name (LANGFUSE_REDIS_AUTH, CADDY_BASIC_AUTH_PLAINTEXT) but NOT `AUTH_` as a prefix
+#: (TRADE_DATA_AUTH_MODE is a mode switch), and a connection string by name (DATABASE_URL, *_DSN).
 SECRET_LOOKING = re.compile(
-    r"(SECRET|TOKEN|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|AUTH|PLAINTEXT|PRIVATE_KEY|API_KEY|KEY_ID"
-    r"|(?:^|_)KEY$|DSN|DB_URL|DATABASE_URL)"
+    r"(SECRET|TOKEN|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|PLAINTEXT|PRIVATE_KEY|API_KEY|KEY_ID"
+    r"|(?:^|_)AUTH$|BASIC_AUTH|AUTH_TOKEN|(?<!PUBLIC)_KEY$|^KEY$|DSN|DB_URL|DATABASE_URL)"
 )
 #: `scheme://<userinfo>@` -- a credential carried INSIDE a value, whatever the knob is called
 _USERINFO = re.compile(r"([A-Za-z][A-Za-z0-9+.\-]*://)[^/@\s]+@")
@@ -119,8 +119,9 @@ def catalog(domains: Sequence[type[Domain]]) -> str:
             m = meta(info) or {}
             k = m.get("cls", "UNDECLARED")
             dflt = MASK if k == KnobClass.SECRET else json.dumps(_jsonable(_default(info)), sort_keys=True)
+            doc = (m.get("doc") or "") + (f" (not secret: {m['not_secret']})" if m.get("not_secret") else "")
             cells = [cls.domain, f"`{m.get('env', name)}`", str(k), f"`{dflt}`", m.get("unit") or "",
-                     (m.get("doc") or "").replace("|", "\\|"), ", ".join(m.get("affects") or [])]  # fmt: skip
+                     doc.replace("|", "\\|"), ", ".join(m.get("affects") or [])]  # fmt: skip
             rows.append("| " + " | ".join(cells) + " |")
     return "\n".join(rows) + "\n"
 
@@ -150,8 +151,12 @@ def lint(domains: Sequence[type[Domain]]) -> list[str]:
                 findings.append(f"env {env} declared twice: {envs[env]} and {where}")
             envs[env] = where
             secret = m["cls"] == KnobClass.SECRET
-            if SECRET_LOOKING.search(env) and not secret:
-                findings.append(f"{where}: {env} looks like a credential but is classed {m['cls']}")
+            looks = bool(SECRET_LOOKING.search(env))
+            if looks and not secret and not m.get("not_secret"):
+                findings.append(f"{where}: {env} looks like a credential but is classed {m['cls']} "
+                                "(class it SECRET, or declare knob(not_secret='<why>'))")  # fmt: skip
+            if m.get("not_secret") and not looks:
+                findings.append(f"{where}: declares not_secret but {env} does not look like a credential -- drop it")
             dflt = _default(info)
             if not secret and isinstance(dflt, str) and _USERINFO.search(dflt):
                 findings.append(f"{where}: its default carries URL credentials (scheme://user:pass@) but is "
@@ -162,6 +167,17 @@ def lint(domains: Sequence[type[Domain]]) -> list[str]:
             if typed_secret and not secret:
                 findings.append(f"{where}: typed as a secret but classed {m['cls']}")
     return findings
+
+
+def exemptions(domains: Sequence[type[Domain]]) -> list[str]:
+    """Every declared `not_secret` exemption, `domain.name: ENV -- <reason>` (the audit list)."""
+    out = []
+    for cls in sorted(domains, key=lambda c: getattr(c, "domain", c.__name__)):
+        for name, info in cls.model_fields.items():
+            m = meta(info)
+            if m and m.get("not_secret"):
+                out.append(f"{cls.domain}.{name}: {m['env']} -- {m['not_secret']}")
+    return out
 
 
 def load_all(

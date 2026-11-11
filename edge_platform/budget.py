@@ -18,8 +18,10 @@ INVARIANTS
 - The DB clock is the only clock: every decision reads `clock_timestamp()` ONCE per statement. No
   local-time fallback.
 - One decision statement per attempt (row lock only), in a transaction whose `lock_timeout` /
-  `statement_timeout` are set LOCAL to the caller's remaining `max_wait` -- a row lock held by
-  someone else past it is `BudgetUnavailable`, never an unbounded block. Waiting holds no
+  `statement_timeout` are set LOCAL (never an unbounded block). THE LOCK RULE (`LOCK_FLOOR_S`): a
+  row-lock wait is CONTENTION -- re-asked inside `max_wait`, then one more `LOCK_FLOOR_S` attempt,
+  ending granted or `BudgetExhausted` and counted `lock_contended`; only a lock held past
+  `max_wait + LOCK_FLOOR_S` (a hung transaction) is `BudgetUnavailable`. Waiting holds no
   connection: the sleep is outside any transaction (with a little jitter so waiters do not wake in
   lockstep), and a refused attempt re-asks after the window the DB names.
 - FAILS CLOSED: a store error raises `BudgetUnavailable` -- never a silent grant. There is no default
@@ -36,9 +38,11 @@ INVARIANTS
 
 TELEMETRY (what fails silently, where it lands): `stats` holds the per-process counters --
 wait_seconds / wait_events (a starved lane), exhausted / unavailable (a lane refused, or the store
-down), observe_invalid (malformed vendor headers ignored), flush_failed (the vendor reading did not
-land), flush_stale (a reading that arrived after its window closed), config_conflict -- and `stats.series()` renders them as `budget_*_total{key}` for the
-consumer's textfile / exporter. The ROW is the outside view: `updated_at` stale while the lane should
+down or its row lock stuck -- the PAGING counter), lock_contended (row-lock waits that timed out:
+a queue, not an outage), observe_invalid (malformed vendor headers ignored), flush_failed (the
+vendor reading did not land), flush_stale (a reading that arrived after its window closed),
+config_conflict -- and `stats.series()` renders them as `budget_*_total{key}` for the consumer's
+textfile / exporter. The ROW is the outside view: `updated_at` stale while the lane should
 be spending means nothing is drawing (a guard nothing invokes); vendor used above ours means an
 unmetered caller exists. Watching the row is the consumer's watchdog.
 """
@@ -74,8 +78,20 @@ RESET_HORIZON_PERIODS = 2
 _OBSERVE_SKEW_S = 300.0
 #: Earliest plausible reset: anything before is a unit/parse error (seconds read as ms -> 1970).
 _EPOCH_FLOOR = dt.datetime(2000, 1, 1, tzinfo=dt.UTC)
+#: THE LOCK RULE. Waiting on the row lock is CONTENTION, not unavailability: every process serialises
+#: on one row and each holder keeps it for one millisecond-scale statement. An attempt waits for the
+#: lock up to the remaining `max_wait`; a lock timeout (55P03, or 57014 when it was OUR statement
+#: bound) inside `max_wait` re-asks, counted `stats.lock_contended`. Once `max_wait` is spent, ONE
+#: last attempt waits LOCK_FLOOR_S more -- ordinary contention (a queue of waiters woken together at a
+#: window end) clears in that, and the attempt grants or raises BudgetExhausted like any other. Only a
+#: lock held past `max_wait + LOCK_FLOOR_S` -- a hung transaction, not a queue -- is BudgetUnavailable
+#: (`budget_unavailable_total` is the PAGING counter, so contention must never reach it).
+LOCK_FLOOR_S = 2.0
 #: Postgres `lock_timeout = 0` means NO timeout, so a remaining wait of ~0 still gets this floor.
 _MIN_LOCK_MS = 50
+#: SQLSTATEs of a bound we set: lock_not_available / query_canceled (the latter only when our own
+#: statement_timeout is what fired -- an operator's pg_cancel_backend is not contention).
+_LOCK_TIMEOUT, _QUERY_CANCELED = "55P03", "57014"
 #: `statement_timeout` = the lock budget plus this (the statement itself, once it holds the lock).
 _STMT_SLACK_MS = 1000
 #: A flush has no caller-side max_wait; it waits this long for the row lock, then counts a failure.
@@ -130,6 +146,27 @@ class BudgetUnavailable(RuntimeError):
         self.key = key
 
 
+class _LockContended(Exception):
+    """Internal: an attempt's own lock / statement bound fired (contention, see LOCK_FLOOR_S)."""
+
+
+def _sqlstate(exc: BaseException) -> str | None:
+    """The SQLSTATE anywhere on a SQLAlchemy / asyncpg exception chain, or None."""
+    seen: set[int] = set()
+    todo: list[BaseException | None] = [exc]
+    while todo:
+        e = todo.pop()
+        if e is None or id(e) in seen:
+            continue
+        seen.add(id(e))
+        for attr in ("sqlstate", "pgcode"):
+            v = getattr(e, attr, None)
+            if isinstance(v, str) and len(v) == 5:
+                return v
+        todo += [getattr(e, "orig", None), e.__cause__, e.__context__]
+    return None
+
+
 @dataclass(slots=True)
 class BudgetStats:
     """Per-process counters. Monotonic; rendered by `series()`."""
@@ -142,6 +179,7 @@ class BudgetStats:
     observe_invalid: int = 0
     flush_failed: int = 0
     flush_stale: int = 0
+    lock_contended: int = 0
     config_conflict: int = 0
 
     def series(self, key: str) -> list[tuple[str, dict[str, str], float]]:
@@ -259,9 +297,24 @@ class PgWindowBudget:
             raise ValueError(f"weight must be a positive int, got {weight!r}")
         if weight > self._window.capacity:
             raise ValueError(f"weight {weight} can never fit capacity {self._window.capacity} ({self._key})")
-        waited, conflicts = 0.0, 0
+        waited, conflicts, t0, contended = 0.0, 0, time.monotonic(), False
         while True:
-            row = await self._attempt(weight, self._max_wait - waited)
+            remaining = self._max_wait - (time.monotonic() - t0)
+            last = remaining <= 0  # max_wait spent: the one LOCK_FLOOR_S attempt (the lock rule)
+            budget_s = LOCK_FLOOR_S if last else remaining
+            try:
+                row = await self._attempt(weight, budget_s)
+            except _LockContended:
+                self.stats.lock_contended += 1
+                contended = True
+                if not last:
+                    continue  # contention inside max_wait: re-ask
+                self.stats.unavailable += 1
+                log.warning("budget_lock_stuck key=%s held_past_s=%.1f", self._key, self._max_wait + LOCK_FLOOR_S)
+                raise BudgetUnavailable(
+                    self._key,
+                    f"row lock held past max_wait {self._max_wait:g}s + {LOCK_FLOOR_S:g}s -- a hung transaction, not a queue",
+                ) from None
             if row is None:  # lost the create race: the row exists now, ask again
                 conflicts += 1
                 if conflicts > _CONFLICT_RETRIES:
@@ -274,8 +327,11 @@ class PgWindowBudget:
                 self.stats.grants += 1
                 return waited
             wait_s = max(float(wait_s or 0.0), 0.001)
-            if waited + wait_s > self._max_wait:
+            elapsed = max(waited, time.monotonic() - t0)  # lock waits spend max_wait too
+            if elapsed + wait_s > self._max_wait:
                 self.stats.exhausted += 1
+                if contended:
+                    log.info("budget_exhausted_after_contention key=%s", self._key)
                 raise BudgetExhausted(self._key, waited, wait_s)
             self.stats.wait_events += 1
             self.stats.wait_seconds += wait_s
@@ -286,7 +342,7 @@ class PgWindowBudget:
                     log.warning("budget_on_wait_hook_failed key=%s", self._key, exc_info=True)
             # Every waiter is told the same window end: a little jitter (inside max_wait) spreads the
             # wake so N processes do not queue on the row lock in the same millisecond.
-            spread = min(self._jitter, self._max_wait - waited - wait_s)
+            spread = min(self._jitter, self._max_wait - elapsed - wait_s)
             nap = wait_s + (random.uniform(0.0, spread) if spread > 0 else 0.0)
             await self._sleep(nap)
             waited += nap
@@ -295,19 +351,22 @@ class PgWindowBudget:
     async def _bound(s: Any, budget_s: float) -> None:
         """Bound THIS transaction's lock wait by `budget_s` (set_config(..., true) = SET LOCAL:
         transaction-scoped, so safe behind pgbouncer transaction pooling). A row lock held past it
-        raises -- mapped to BudgetUnavailable by the caller -- instead of blocking a `max_wait=0.5`
-        caller for as long as the holder likes."""
+        raises instead of blocking a `max_wait=0.5` caller for as long as the holder likes; `acquire`
+        applies the lock rule (LOCK_FLOOR_S) to that."""
         lock_ms = max(int(budget_s * 1000), _MIN_LOCK_MS)
         await s.execute(_TIMEOUTS, {"lock": f"{lock_ms}ms", "stmt": f"{lock_ms + _STMT_SLACK_MS}ms"})
 
     async def _attempt(self, weight: int, remaining_s: float) -> tuple[bool, float, int | None, int | None] | None:
         params = {"key": self._key, "w": weight, "cap": self._window.capacity, "period": self._window.period_s}
+        started = time.monotonic()
         try:
             async with self._sessions() as s:
                 await self._bound(s, remaining_s)
                 rows = (await s.execute(self._acquire_sql, params)).all()
                 await s.commit()
         except Exception as exc:
+            if self._ours(exc, remaining_s, time.monotonic() - started):
+                raise _LockContended from exc
             self.stats.unavailable += 1
             log.warning("budget_unavailable key=%s err=%s", self._key, type(exc).__name__)
             raise BudgetUnavailable(self._key, f"{type(exc).__name__}: {exc}") from exc
@@ -315,6 +374,16 @@ class PgWindowBudget:
             return None
         g, w, pc, pp = rows[0]
         return bool(g), float(w), pc, pp
+
+    @staticmethod
+    def _ours(exc: BaseException, budget_s: float, took_s: float) -> bool:
+        """Did one of OUR bounds fire? 55P03 is always ours (only `_bound` sets lock_timeout here);
+        57014 only when the attempt ran at least as long as our statement bound."""
+        state = _sqlstate(exc)
+        if state == _LOCK_TIMEOUT:
+            return True
+        stmt_s = (max(int(budget_s * 1000), _MIN_LOCK_MS) + _STMT_SLACK_MS) / 1000
+        return state == _QUERY_CANCELED and took_s >= 0.9 * stmt_s
 
     def _check_config(self, prior_cap: int | None, prior_period: int | None) -> None:
         if prior_cap is None:

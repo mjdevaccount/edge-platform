@@ -12,7 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-from .render import catalog, lint, schema
+from .render import catalog, exemptions, lint, schema
 
 
 def _domains(target: str) -> list:
@@ -42,6 +42,8 @@ def main(argv: list[str] | None = None) -> int:
             findings = lint(domains)
             for f in findings:
                 print(f"config-lint: {f}")
+            for e in exemptions(domains):
+                print(f"config-lint: exempt (not_secret): {e}")
             print(f"config-lint: {len(findings)} finding(s) over {len(domains)} domain(s)")
             return 1 if findings else 0
         text = render(a.command, domains)

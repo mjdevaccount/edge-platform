@@ -15,6 +15,7 @@ from edge_platform.config import (
     Source,
     catalog,
     effective,
+    exemptions,
     fingerprint,
     knob,
     lint,
@@ -23,7 +24,7 @@ from edge_platform.config import (
 )
 from edge_platform.config.__main__ import main as cli
 
-from .domains import BAD, CANARY, DOMAINS, Risk
+from .domains import BAD, CANARY, DOMAINS, EXEMPT, Risk
 
 ENVS = [
     "T_RISK_LOSS_LIMIT_R",
@@ -242,10 +243,10 @@ MISSED = [
 ]
 
 
-def _one(env: str, cls: KnobClass, default: str = "x") -> type[Domain]:
+def _one(env: str, cls: KnobClass, default: str = "x", **kw) -> type[Domain]:
     class _D(Domain):
         domain = "t_one"
-        value: str = knob(default, cls=cls, env=env, doc="One knob.")
+        value: str = knob(default, cls=cls, env=env, doc="One knob.", **kw)
 
     return _D
 
@@ -278,3 +279,43 @@ def test_a_url_credential_in_a_default_is_a_lint_finding_both_ways() -> None:
     leaky = _one("T_UPSTREAM_URL", KnobClass.TOPOLOGY, default="https://user:pw@vendor.example/api")
     assert any("carries URL credentials" in f for f in lint([leaky]))
     assert lint([_one("T_UPSTREAM_URL", KnobClass.TOPOLOGY, default="https://vendor.example/api")]) == []
+
+
+# --- review round 2: real trade-data names must not false-fire; the declared exemption -------------
+
+REAL_NOT_SECRET = ["TRADE_DATA_AUTH_MODE", "TRADE_DATA_AUTH_TARGET_ANON_PERMISSIONS", "LANGFUSE_PUBLIC_KEY"]
+
+
+@pytest.mark.parametrize("env", REAL_NOT_SECRET)
+def test_a_real_non_credential_name_lints_clean_and_boots(env: str) -> None:
+    dom = _one(env, KnobClass.TOPOLOGY)
+    assert lint([dom]) == []
+    assert load_all([dom])["t_one"].value == "x"  # round 1's pattern refused this boot
+
+
+def test_not_secret_silences_the_name_finding_and_is_audited(capsys) -> None:
+    assert any("looks like a credential" in f for f in lint([_one("T_VENDOR_TOKEN_KIND", KnobClass.TOPOLOGY)]))
+    assert lint(EXEMPT) == []
+    assert exemptions(EXEMPT) == [
+        "t_exempt.vendor_token_kind: T_VENDOR_TOKEN_KIND -- names the scheme (bearer/basic), never carries the token"
+    ]
+    assert "(not secret: names the scheme" in catalog(EXEMPT)
+    assert cli(["lint", "tests.config.domains:EXEMPT"]) == 0
+    assert "exempt (not_secret): t_exempt.vendor_token_kind" in capsys.readouterr().out
+
+
+def test_an_exemption_needs_a_reason_a_non_secret_class_and_a_name_that_needs_it() -> None:
+    for bad in ("", "   "):
+        with pytest.raises(ValueError, match="not_secret needs a reason"):
+            _one("T_VENDOR_TOKEN_KIND", KnobClass.TOPOLOGY, not_secret=bad)
+    with pytest.raises(ValueError, match="pick one"):
+        knob("x", cls=KnobClass.SECRET, env="T_VENDOR_TOKEN", doc="d.", not_secret="why")
+    stale = _one("T_RISK_HOST", KnobClass.TOPOLOGY, not_secret="never looked like one")
+    assert any("does not look like a credential -- drop it" in f for f in lint([stale]))
+
+
+def test_url_userinfo_is_redacted_even_on_an_exempt_knob(caplog, monkeypatch) -> None:
+    monkeypatch.setenv("T_VENDOR_TOKEN_KIND", "https://u:pw-canary-77@vendor.example/x")
+    with caplog.at_level(logging.INFO, logger="edge_platform.config"):
+        load_all(EXEMPT)
+    assert "pw-canary-77" not in caplog.text and "https://***@vendor.example/x" in caplog.text

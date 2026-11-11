@@ -42,3 +42,14 @@ class _Leaky(Domain):
 
 
 BAD = [Risk, _Undeclared, _Twin, _Leaky]
+
+
+class _Exempt(Domain):
+    """Matches SECRET_LOOKING by name, is not a credential, and says why (the declared exemption)."""
+
+    domain = "t_exempt"
+    vendor_token_kind: str = knob("bearer", cls=KnobClass.TOPOLOGY, env="T_VENDOR_TOKEN_KIND", doc="Token scheme.",
+                                  not_secret="names the scheme (bearer/basic), never carries the token")  # fmt: skip
+
+
+EXEMPT = [_Exempt]

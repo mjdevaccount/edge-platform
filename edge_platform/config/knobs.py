@@ -60,11 +60,14 @@ def knob(
     ge: float | None = None,
     le: float | None = None,
     on_unreadable: Any = _UNSET,
+    not_secret: str | None = None,
 ) -> Any:
     """A pydantic Field whose env name is `env` and whose metadata carries the knob's class. `doc` is
     one sentence a stranger understands; `affects` names the graded tables or lanes it shapes.
     `on_unreadable` (OPERATIONAL only): the value used when the override store cannot be read -- how a
-    knob that gates cost fails CLOSED."""
+    knob that gates cost fails CLOSED. `not_secret` ("<why>", non-empty): a DECLARED exemption for a
+    name that matches `SECRET_LOOKING` but is not a credential (TRADE_DATA_AUTH_MODE); the reason is
+    rendered by `catalog()` and listed by `exemptions()` / the CLI lint, so every exemption is auditable."""
     if not isinstance(cls, KnobClass):
         raise TypeError(f"knob {env!r}: cls must be a KnobClass")
     if not isinstance(env, str) or not _ENV.match(env):
@@ -73,9 +76,16 @@ def knob(
         raise ValueError(f"knob {env}: doc is required (one sentence)")
     if on_unreadable is not _UNSET and cls is not KnobClass.OPERATIONAL:
         raise ValueError(f"knob {env}: on_unreadable is for OPERATIONAL knobs only")
+    if not_secret is not None:
+        if not isinstance(not_secret, str) or not not_secret.strip():
+            raise ValueError(f"knob {env}: not_secret needs a reason (why this name is not a credential)")
+        if cls is KnobClass.SECRET:
+            raise ValueError(f"knob {env}: classed SECRET and declared not_secret -- pick one")
     meta: dict[str, Any] = {"cls": cls.value, "doc": doc.strip(), "env": env, "unit": unit, "affects": list(affects)}
     if on_unreadable is not _UNSET:
         meta["on_unreadable"] = on_unreadable
+    if not_secret is not None:
+        meta["not_secret"] = not_secret.strip()
     return Field(default, validation_alias=env, ge=ge, le=le, description=doc.strip(), json_schema_extra={"knob": meta})
 
 
