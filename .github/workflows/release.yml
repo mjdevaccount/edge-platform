@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: tag matches pyproject and package version
         run: |
           v=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
