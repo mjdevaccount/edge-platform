@@ -98,13 +98,20 @@ on the home IP shares them. Three files say everything about that budget:
 | `ntfy-policy.cases.json` | the literal cases every reader runs in its own language, and `policy_sha256` pinning the policy bytes | each consumer's CI |
 | the sender registry (CONSUMER-SUPPLIED since v0.6.0: `--registry PATH` / `$EDGE_NOTIFY_PUBLISHERS`; none = exit 2) | WHO spends it: every sender, its route (`library` / `direct` / `am-webhook` / `gatus` / `ci`) and mode (`gated` / `counted` / `exempt` + why / `uncounted` + what is owed). Example: `tests/fixtures/ntfy-publishers.json`; EDGE's lives in edge-host `policy/ntfy-publishers.json` | `publishers.py` |
 
-CANONICAL TODAY: edge-host `policy/ntfy-publishers.json` for the registry (v0.6.0); **edge-host's `policy/ntfy-policy.json`
-for the policy and its cases** -- the copy here is a parity-checked copy (mcp
-`scripts/lint_script_parity.py` PARITY_PATHS), byte-identical (sha256 `186af626…`), so no consumer
-had to move. The policy's canonical home moves HERE at v0.2, in the same release that edits the
-policy's `about` text, and every copy changes in that round. A vendored copy in a consumer is
-transitional: it proves itself equal with `edge-notify check-copy`, and its exit is pinning this
-release instead.
+CANONICAL: **this package** for the policy and its cases (since 2026-10-31; edge-host and trade-data
+retired their copies and read the pinned release). The registry is the consumer's own (edge-host
+`policy/ntfy-publishers.json` for EDGE, v0.6.0). The one vendored copy left is the llm box's
+(`lib-notify.ps1` is PowerShell and cannot import the package): it is delivered from THIS release's
+assets, verified against `SHA256SUMS`, and proves itself equal with `edge-notify check-copy`; mcp
+`scripts/lint_script_parity.py` compares it daily. (The policy's own `about` text still names
+edge-host; it changes in the next release that edits the policy bytes, so no pinned copy moves for
+a comment.)
+
+`parse()` is the UNION of every reader's refusals, the llm box's included (v0.12.0):
+`quota.account_path` must be a safe URL path, reserve and cap are at most 250 (one day of quota),
+a publisher name is at most 255 characters with no `..`, and `parse(raw, strict_night=True)` is
+the PowerShell reader's 0..23 night bound. `NtfyPolicy.sent_today(state_dir, utc)` reads the send
+ledger: `{}` for a day with no sends, **None when unreadable -- blind is not zero**.
 
 ### `edge-notify` (the CLI consumers run)
 
