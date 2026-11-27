@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import datetime as dt
 import json
 
 import pytest
@@ -119,3 +120,93 @@ def test_case_rows_flatten_null_and_bools():
     assert len(rows) == len(ALL)
     blind = next(r for r in rows if "BLIND" in r)
     assert "\t\t" in blind  # remaining=null -> empty field
+
+
+# --- the llm box reader's refusals, folded into parse() (2026-11-26) ---
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["v1/account", "/v1/../account", "//evil.example/v1", "/v1/account?x=1", "", 7, None],
+)
+def test_a_bad_account_path_is_refused(value):
+    edited = copy.deepcopy(RAW)
+    edited["quota"]["account_path"] = value
+    with pytest.raises(ValueError, match="account_path"):
+        pol.parse(edited)
+
+
+def test_a_missing_account_path_is_refused():
+    edited = copy.deepcopy(RAW)
+    del edited["quota"]["account_path"]
+    with pytest.raises(KeyError):
+        pol.parse(edited)
+
+
+def test_the_account_path_is_read():
+    assert POLICY.account_path == "/v1/account"
+
+
+@pytest.mark.parametrize(
+    ("where", "key", "value"),
+    [
+        ("quota", "reserve", 251),
+        ("publisher_cap", "per_utc_day", 251),
+        ("publisher_cap", "per_utc_day", 0),
+        ("layout", "publisher_max_len", 256),
+    ],
+)
+def test_a_count_past_one_days_quota_is_refused(where, key, value):
+    edited = copy.deepcopy(RAW)
+    edited[where][key] = value
+    with pytest.raises(ValueError):
+        pol.parse(edited)
+
+
+def test_an_exempt_publisher_with_dotdot_is_refused():
+    edited = copy.deepcopy(RAW)
+    edited["publisher_cap"]["exempt"]["a..b"] = "r"
+    with pytest.raises(ValueError, match="unsafe"):
+        pol.parse(edited)
+
+
+def test_strict_night_refuses_24_and_the_default_keeps_it():
+    edited = copy.deepcopy(RAW)
+    edited["night"]["start_hour"], edited["night"]["end_hour"] = 24, 0
+    assert pol.parse(edited).night_hours() == frozenset()
+    with pytest.raises(ValueError, match="start_hour"):
+        pol.parse(edited, strict_night=True)
+    assert pol.parse(RAW, strict_night=True) == POLICY
+
+
+# --- sent_today: blind is not zero ---
+
+UTC_NOON = dt.datetime(2026, 11, 26, 12, 0, tzinfo=dt.UTC)
+
+
+def test_sent_today_counts_non_blank_lines_per_publisher(tmp_path):
+    day = tmp_path / "sent" / "20261126"
+    day.mkdir(parents=True)
+    (day / "health-probe").write_text("12:00:00 4\n12:05:00 3\n\n", encoding="ascii")
+    (day / "crashloop-watch").write_text("01:00:00 5\n", encoding="ascii")
+    (tmp_path / "sent" / "20261125").mkdir()
+    (tmp_path / "sent" / "20261125" / "health-probe").write_text("x\n", encoding="ascii")
+    assert POLICY.sent_today(tmp_path, UTC_NOON) == {"health-probe": 2, "crashloop-watch": 1}
+
+
+def test_sent_today_reads_the_utc_day_of_a_local_time(tmp_path):
+    (tmp_path / "sent" / "20261126").mkdir(parents=True)
+    (tmp_path / "sent" / "20261126" / "p").write_text("a\n", encoding="ascii")
+    local_evening = dt.datetime(2026, 11, 25, 20, 0, tzinfo=dt.timezone(dt.timedelta(hours=-5)))
+    assert POLICY.sent_today(tmp_path, local_evening) == {"p": 1}
+
+
+def test_sent_today_missing_day_is_empty_not_none(tmp_path):
+    assert POLICY.sent_today(tmp_path, UTC_NOON) == {}
+
+
+def test_sent_today_unreadable_is_none_not_zero(tmp_path):
+    # the day "dir" is a FILE: iterdir raises NotADirectoryError (an OSError) on every platform
+    (tmp_path / "sent").mkdir()
+    (tmp_path / "sent" / "20261126").write_text("not a dir", encoding="ascii")
+    assert POLICY.sent_today(tmp_path, UTC_NOON) is None
