@@ -1,3 +1,9 @@
-"""EDGE's shared platform package. Tenants: `edge_platform.notify` (the ntfy.sh budget), `edge_platform.fence` (the deploy fence), `edge_platform.env` (the .env reader), `edge_platform.registry` (the duplicate-guarded spec table), `edge_platform.service` (the FastAPI composition root, extra `[service]`), `edge_platform.lanes` (ingest lanes), `edge_platform.watch` (the watchdog plane), `edge_platform.stamp` (fingerprints), `edge_platform.sqlkit` (table-name validation, savepoint, jsonb text), `edge_platform.budget` (the shared Postgres rate window, extra `[sql]`), `edge_platform.plugins` (the strict entry-point loader, extra `[plugins]`), `edge_platform.config` (typed knobs with a class, a source and a fingerprint, extra `[service]`)."""
+"""EDGE's shared platform package: the estate half. Tenants that live here: `edge_platform.fence` (the deploy fence), `edge_platform.env` (the .env reader), `edge_platform.notify` policy + publishers + CLI (the ntfy.sh budget), `edge_platform.lanes` (ingest lanes), `edge_platform.windmill` (Windmill step templates).
 
-__version__ = "0.12.0"
+Since v0.13.0 the general planes live in platform-kit and are imported from there under their old names, the same module objects (`edge_platform._moved`): `registry`, `stamp`, `sqlkit`, `budget`, `plugins`, `config`, `service`, `watch`, `testing` and `notify`'s types / pipeline / local / ledger. Importing this package imports none of them."""
+
+from edge_platform import _moved
+
+_moved.install()
+
+__version__ = "0.13.0"

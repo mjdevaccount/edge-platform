@@ -1,11 +1,14 @@
 [project]
 name = "edge-platform"
-version = "0.12.0"
-description = "EDGE's shared platform package: the ntfy.sh push budget (notify), the trading-hours deploy fence (fence), the compose-rules .env reader (env), the duplicate-guarded spec registry (registry), the FastAPI service kit (service), shipped Windmill step templates (windmill), ingest lanes (lanes), the watchdog plane (watch), fingerprints (stamp), the shared Postgres rate budget (budget), the plugin loader (plugins) and typed configuration (config)."
+version = "0.13.0"
+description = "EDGE's shared platform package, the estate half: the trading-hours deploy fence (fence), the compose-rules .env reader (env), the ntfy.sh push budget policy (notify), ingest lanes (lanes) and shipped Windmill step templates (windmill). The general planes (registry, stamp, sqlkit, budget, plugins, config, service, watch, the push pipeline) are platform-kit's, imported here under their old names."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
+# platform-kit and primitives-kit are on no index: a PEP 508 direct reference (a public git tag) is
+# the pin, so pip and uv both fetch the same commit and no index can answer for the name.
 dependencies = [
+    "platform-kit @ git+https://github.com/mjdevaccount/groundwork@platform-kit-v0.1.0#subdirectory=packages/platform-kit",
     "pyyaml>=6.0",
     "tzdata>=2025.2 ; sys_platform == 'win32'",
 ]
@@ -19,24 +22,28 @@ edge-env = "edge_platform.env.cli:main"
 db = [
     "psycopg[binary]>=3.2",
 ]
-# edge_platform.service: the composition root trade-data and trade-quant share (db core, lifespan,
-# settings base, /admin/run/* timeline middleware). Importing edge_platform alone never needs these.
+# The general extras are platform-kit's (since v0.13.0), named the same here so a consumer's
+# `edge-platform[service]` keeps working. service: edge_platform.service (and config, whose
+# pydantic-settings it carries).
 service = [
-    "fastapi>=0.115",
-    "pydantic-settings>=2.7",
-    "sqlalchemy[asyncio]>=2.0.36",
-    "structlog>=24.4",
+    "platform-kit[service] @ git+https://github.com/mjdevaccount/groundwork@platform-kit-v0.1.0#subdirectory=packages/platform-kit",
 ]
-# The async-SQL stores: edge_platform.watch.state (the watchdog dedup memory),
-# edge_platform.notify.ledger (claims / budget / deliveries) and edge_platform.budget (the shared
-# vendor rate window). Table names are the consumer's.
+# edge_platform.config alone: typed knobs (pydantic-settings), without the FastAPI chassis.
+config = [
+    "platform-kit[config] @ git+https://github.com/mjdevaccount/groundwork@platform-kit-v0.1.0#subdirectory=packages/platform-kit",
+]
+# The async-SQL stores: edge_platform.watch.state, edge_platform.notify.ledger and
+# edge_platform.budget. platform-kit's [sql] needs primitives-kit (the budget error tree), on no index.
+# uv resolves it from groundwork's own workspace AT THE PLATFORM-KIT TAG; pip cannot (it ignores
+# [tool.uv.sources]) and would ask PyPI. So it is pinned here at that same tag: one URL for uv, the
+# only route for pip. Pinning it at its own primitives-kit tag instead is a second URL (uv refuses).
 sql = [
-    "sqlalchemy[asyncio]>=2.0.36",
+    "platform-kit[sql] @ git+https://github.com/mjdevaccount/groundwork@platform-kit-v0.1.0#subdirectory=packages/platform-kit",
+    "primitives-kit @ git+https://github.com/mjdevaccount/groundwork@platform-kit-v0.1.0#subdirectory=packages/primitives-kit",
 ]
-# edge_platform.plugins: the strict entry-point loader over pluggy (R1-R10, plugins.py docstring), and
-# edge_platform.testing.plugin_conformance, the suite a consumer runs against its own group (needs pytest).
+# edge_platform.plugins and edge_platform.testing.plugin_conformance (needs pytest).
 plugins = [
-    "pluggy>=1.7",
+    "platform-kit[plugins] @ git+https://github.com/mjdevaccount/groundwork@platform-kit-v0.1.0#subdirectory=packages/platform-kit",
 ]
 # edge_platform.lanes: dlt land/promote + the no-TRUNCATE postgres destination. The LaneSpec core,
 # source gate and freshness verdict are stdlib and import without it.
@@ -49,6 +56,10 @@ dlt = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+# the platform-kit / primitives-kit pins above are direct references (no index carries them)
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["edge_platform"]
 
@@ -56,7 +67,7 @@ packages = ["edge_platform"]
 dev = [
     "aiosqlite>=0.21",
     "asyncpg>=0.30",
-    "edge-platform[dlt,plugins,service,sql]",
+    "edge-platform[config,dlt,plugins,service,sql]",
     "exchange-calendars>=4.13.2",
     "httpx>=0.28",
     "pytest>=8.3",
@@ -66,7 +77,7 @@ dev = [
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "RUF"]

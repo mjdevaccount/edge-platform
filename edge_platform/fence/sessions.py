@@ -32,8 +32,18 @@ MAX_AGE_H = 336.0  # lib-clock.sh CLOCK_MAX_AGE_H: a cache older than 14 days is
 BUNDLED = "sessions-bundled.json"
 
 
-class ClockBlind(RuntimeError):
-    """The session table cannot answer. Exit 2 territory, never a guess."""
+try:  # the push path's clock error, when platform-kit is installed (a bare `python -S` checkout has none)
+    from platform_kit.notify.types import ClockBlind as _PushClockBlind
+except ImportError:  # pragma: no cover - exercised by tests/test_moved.py in a -S subprocess
+    _PushClockBlind = RuntimeError  # type: ignore[assignment,misc]
+
+
+class ClockBlind(_PushClockBlind):
+    """The session table cannot answer. Exit 2 territory, never a guess.
+
+    A `platform_kit.notify.types.ClockBlind` (and so a RuntimeError) when platform-kit is installed:
+    the push pipeline names a fence clock failure inside a consumer's ledger `notify_clock_blind`,
+    as it did when its clock error was this class, not `notify_ledger_unavailable`."""
 
 
 def _utc(s: str) -> dt.datetime:

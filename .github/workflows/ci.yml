@@ -16,16 +16,8 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # v0.10.0: the SQL stores (watch.state, notify.ledger) run against a REAL Postgres -- a faked store
-    # proves the caller, never the statement. REQUIRED=1 turns the local "no DSN -> skip" into a FAIL.
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_PASSWORD: test
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    # v0.13.0: the SQL stores (watch.state, notify.ledger, budget) are platform-kit's, and their
+    # real-Postgres tests run in groundwork's CI; nothing here talks to a database.
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.4.0
@@ -35,9 +27,6 @@ jobs:
           uv run ruff check --output-format=github .
           uv run ruff format --check .
       - name: tests
-        env:
-          EDGE_PLATFORM_TEST_PG: postgresql://postgres:test@localhost:5432/postgres
-          EDGE_PLATFORM_TEST_PG_REQUIRED: "1"
         run: uv run pytest -q
       - name: the .env twins against docker compose itself (tests/env/lib-env.test.sh)
         # The oracle: both twins over one fixture, LF and CRLF, against answers compose produced, and
@@ -59,6 +48,8 @@ jobs:
           ! unzip -l dist/edge_platform-*.whl | grep -E 'fence-policy|ntfy-publishers' || { echo "::error::the wheel ships estate config"; exit 1; }
           uvx --from dist/edge_platform-*.whl edge-env check-copy edge_platform/env/lib-env.sh edge_platform/env/lib_env.py
           sh=$(uvx --from dist/edge_platform-*.whl edge-env path sh) && bash -n "$sh"
+          # v0.13.0: every moved module below resolves through the wheel's OWN metadata -- the
+          # platform-kit direct reference -- so these lines also prove the pin a consumer inherits.
           # the [service] extra resolves from the wheel's own metadata and every tenant module imports
           whl=$(ls dist/edge_platform-*.whl)
           uv run --isolated --no-project --with "${whl}[service]" python -c "import edge_platform.registry, edge_platform.service.db, edge_platform.service.lifespan, edge_platform.service.settings, edge_platform.service.timeline, edge_platform.service.flags, edge_platform.service.envelope, edge_platform.service.http_errors, edge_platform.service.auth, edge_platform.service.health, edge_platform.service.pg_identity, edge_platform.service.admin_run"
@@ -72,10 +63,16 @@ jobs:
           uv run --isolated --no-project --with "${whl}" python -c "import edge_platform.watch.spec, edge_platform.watch.runner, edge_platform.watch.pager, edge_platform.notify.pipeline, edge_platform.notify.types, edge_platform.notify.local, edge_platform.stamp, edge_platform.sqlkit"
           uv run --isolated --no-project --with "${whl}[sql]" python -c "import edge_platform.watch.state, edge_platform.notify.ledger"
           # v0.11.0: the shared rate budget needs [sql]; the plugin loader + its conformance suite need
-          # [plugins] (the suite imports pytest lazily); typed config needs [service] (pydantic-settings)
+          # [plugins] (the suite imports pytest lazily); typed config needs [service] or [config] (pydantic-settings)
           uv run --isolated --no-project --with "${whl}[sql]" python -c "from edge_platform.budget import PgWindowBudget, Window, ddl; ddl('s.t')"
           uv run --isolated --no-project --with "${whl}[plugins]" python -c "import edge_platform.plugins, edge_platform.testing.plugin_conformance"
           uv run --isolated --no-project --with "${whl}[service]" python -c "import edge_platform.config, edge_platform.config.__main__"
+          uv run --isolated --no-project --with "${whl}[config]" python -m edge_platform.config --help >/dev/null
+          # pip ignores [tool.uv.sources]: the consumers that pip-install this wheel get platform-kit
+          # only through the direct reference in its metadata. Prove that path, base + [sql].
+          python3 -m venv "$RUNNER_TEMP/pipv"
+          "$RUNNER_TEMP/pipv/bin/pip" install --quiet "${whl}[sql]"
+          "$RUNNER_TEMP/pipv/bin/python" -c "import edge_platform.registry, edge_platform.watch.runner, edge_platform.budget, platform_kit; from edge_platform.notify import Notifier"
           uv run --isolated --no-project --with "${whl}" python -c "import edge_platform.lanes.spec, edge_platform.lanes.freshness, edge_platform.registry; edge_platform.registry.Registry('x').freeze()"
           # v0.8.0: the Windmill templates ship IN the wheel and copy out of it (base wheel, no extra)
           tmp=$(mktemp -d)
