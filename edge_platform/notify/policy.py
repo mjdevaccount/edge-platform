@@ -28,6 +28,11 @@ _PUBLISHER = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")
 _DIGEST = re.compile(r"[A-Za-z0-9_-]+/[A-Za-z0-9_-]+")
 _CHARCLASS = re.compile(r"[A-Za-z0-9._/ _-]+")
 _TZ = re.compile(r"[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*")
+# Appended to the ntfy base URL: one absolute path, no '..', no '//', no query, no host.
+_URL_PATH = re.compile(r"/[A-Za-z0-9/_.-]+")
+# The llm box's lib-notify.ps1 bounds (ConvertFrom-NtfyPolicy): no count may exceed one UTC day of
+# ntfy.sh's anonymous quota, and a publisher name is one NTFS path segment.
+_MAX_COUNT, _MAX_NAME_LEN = 250, 255
 TIERS = ("p1", "p2", "p3")
 _FLAGS = ("pushes", "capped", "reserve", "night_gate")
 
@@ -70,6 +75,7 @@ class NtfyPolicy:
     digest_file: str
     safe_chars: str
     max_len: int
+    account_path: str
 
     def in_night(self, local_hour: int) -> bool:
         """[start, end) in the policy's zone, wrapping midnight -- the SAME expression lib-notify.sh
@@ -131,10 +137,35 @@ class NtfyPolicy:
         day = utc.astimezone(dt.UTC).strftime("%Y%m%d")
         return f"{self.ledger_dir}/{day}/{self.safe_publisher(publisher)}"
 
+    def sent_today(self, state_dir: Path | str, utc: dt.datetime) -> dict[str, int] | None:
+        """{publisher file: accepted pushes} for `utc`'s UTC day, read from the send ledger under
+        `state_dir` (one non-blank line per accepted push, the layout every sender writes).
+
+        {} = the day dir does not exist: nothing was sent yet. None = the ledger could not be read --
+        BLIND IS NOT ZERO, so a caller renders unknown and never "0 sent" over an unreadable dir.
+        """
+        day = Path(state_dir) / self.ledger_dir / utc.astimezone(dt.UTC).strftime("%Y%m%d")
+        try:
+            if not day.exists():
+                return {}
+            out = {}
+            for f in day.iterdir():
+                with f.open(encoding="ascii", errors="replace") as fh:
+                    out[f.name] = sum(1 for ln in fh if ln.strip())
+            return out
+        except OSError:
+            return None
+
 
 def _name(value: object, pat: re.Pattern[str], what: str) -> str:
-    if not isinstance(value, str) or not pat.fullmatch(value):
+    if not isinstance(value, str) or not pat.fullmatch(value) or ".." in value:
         raise ValueError(f"{what}: unsafe or empty name {value!r}")
+    return value
+
+
+def _url_path(value: object, what: str) -> str:
+    if not isinstance(value, str) or not _URL_PATH.fullmatch(value) or ".." in value or "//" in value:
+        raise ValueError(f"{what}: not a safe absolute path {value!r}")
     return value
 
 
@@ -144,8 +175,15 @@ def _int(value: object, what: str, lo: int = 0, hi: int | None = None) -> int:
     return value
 
 
-def parse(raw: dict) -> NtfyPolicy:
-    """The policy, validated. Raises ValueError (or KeyError) naming what is wrong."""
+def parse(raw: dict, *, strict_night: bool = False) -> NtfyPolicy:
+    """The policy, validated. Raises ValueError (or KeyError) naming what is wrong.
+
+    The UNION of every reader's refusals, including the llm box's lib-notify.ps1 (2026-11-26):
+    `quota.account_path` is a safe URL path, reserve and cap are at most one day's quota, a
+    publisher name fits one path segment. `strict_night=True` is that reader's 0..23 night bound;
+    the default keeps 24 legal (see below), so a reader that wants to say "the PowerShell twin
+    would refuse this" asks for it.
+    """
     if raw.get("schema") != 1:
         raise ValueError(f"schema {raw.get('schema')!r}, this reader knows 1")
     q, cap, night, lay = raw["quota"], raw["publisher_cap"], raw["night"], raw["layout"]
@@ -158,13 +196,17 @@ def parse(raw: dict) -> NtfyPolicy:
     # 24 is allowed on purpose: start 24 / end 0 is lib-notify.sh's "never night" (h>=24 || h<0
     # is never true). The llm box's lib-notify.ps1 accepts 0..23 only, so a policy that ever
     # ships 24 must move that reader in the same release (reviewer 401, finding 5).
-    start, end = _int(night["start_hour"], "night.start_hour", 0, 24), _int(night["end_hour"], "night.end_hour", 0, 24)
+    top = 23 if strict_night else 24
+    start, end = (
+        _int(night["start_hour"], "night.start_hour", 0, top),
+        _int(night["end_hour"], "night.end_hour", 0, top),
+    )
     if start <= end:
         raise ValueError(f"night window {start}..{end} does not wrap midnight; every reader assumes it does")
     return NtfyPolicy(
         daily_messages=_int(q["daily_messages"], "quota.daily_messages"),
-        reserve=_int(q["reserve"], "quota.reserve"),
-        cap=_int(cap["per_utc_day"], "publisher_cap.per_utc_day"),
+        reserve=_int(q["reserve"], "quota.reserve", 0, _MAX_COUNT),
+        cap=_int(cap["per_utc_day"], "publisher_cap.per_utc_day", 1, _MAX_COUNT),
         cap_exempt=frozenset(_name(p, _PUBLISHER, "publisher") for p in cap["exempt"]),
         reserve_exempt=frozenset(_name(p, _PUBLISHER, "publisher") for p in q["reserve_exempt"]),
         night_tz=_name(night["tz"], _TZ, "night.tz"),
@@ -176,7 +218,8 @@ def parse(raw: dict) -> NtfyPolicy:
         undelivered_dir=_name(lay["undelivered_dir"], _SEGMENT, "layout.undelivered_dir"),
         digest_file=_name(lay["digest_file"], _DIGEST, "layout.digest_file (<dir>/<file>)"),
         safe_chars=_name(lay["publisher_safe_chars"], _CHARCLASS, "layout.publisher_safe_chars"),
-        max_len=_int(lay["publisher_max_len"], "layout.publisher_max_len", 1),
+        max_len=_int(lay["publisher_max_len"], "layout.publisher_max_len", 1, _MAX_NAME_LEN),
+        account_path=_url_path(q["account_path"], "quota.account_path"),
     )
 
 
