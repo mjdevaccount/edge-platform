@@ -51,7 +51,9 @@ def __getattr__(name: str) -> Any:
 
 
 def __dir__() -> list[str]:
-    return sorted({*globals(), *_MOVED_NAMES, *_MOVED_MODULES})
+    # the moved NAMES (they are in __all__); not the moved submodules, which a bare checkout or a
+    # missing extra cannot import -- `inspect.getmembers` walks dir()
+    return sorted({*globals(), *_MOVED_NAMES})
 
 
 __all__ = [

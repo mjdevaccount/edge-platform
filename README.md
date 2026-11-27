@@ -13,9 +13,12 @@ publishers and CLI, `lanes`, `windmill`.
 
 Every old import keeps working, and an old name is the SAME module object as the new one
 (`edge_platform/_moved.py`, a meta-path alias, `tests/test_moved.py`): one class per name, a
-monkeypatch through either name lands on the code that runs, no module loads twice. Importing
-`edge_platform`, its notify package or any CLI still imports no platform_kit, so the box's
-bare-checkout `python -S` runs are unchanged. New code imports `platform_kit` directly.
+monkeypatch through either name lands on the code that runs, no module loads twice, and the
+platform_kit module keeps its own `__spec__` (resources and `reload` work under both names). From a
+bare checkout under `python -S` -- the box's CLI runs -- notify, fence and env import and run with
+no platform_kit at all. Installed, `import edge_platform` alone imports none of it, while
+`edge_platform.fence` imports `platform_kit.notify` (stdlib) for its `ClockBlind` base. New code
+imports `platform_kit` directly.
 
 What a consumer can see change:
 
@@ -31,6 +34,13 @@ What a consumer can see change:
 - **Python >= 3.12** (platform-kit's floor). A 3.11 consumer stays on v0.12.0.
 - Typing: a type checker does not follow the alias; a consumer with `ignore_missing_imports` sees
   the old names as `Any` until it imports `platform_kit` itself.
+- **Pinning platform-kit beside this package (uv)**: write `rev = "platform-kit-v0.1.0"`, not
+  `tag = ...` -- this package's direct reference reads as a rev, and uv calls a tag source of the
+  same commit a conflicting URL.
+- **`[sql]` beside a primitives-kit pin at its own tag** (market-ports pins one) is two URLs for one
+  package and will not lock; the two trees are identical, so the consumer settles it with
+  `[tool.uv] override-dependencies = ["primitives-kit @ git+https://github.com/mjdevaccount/groundwork@platform-kit-v0.1.0#subdirectory=packages/primitives-kit"]`.
+  `[service]` alone brings no primitives-kit.
 
 | tenant | what | status |
 |---|---|---|

@@ -88,6 +88,7 @@ def test_the_notify_package_resolves_moved_names_lazily_and_identically() -> Non
     for name in n._MOVED_NAMES:
         assert getattr(n, name) is getattr(platform_kit.notify, name), name
         assert name in n.__all__ and name in dir(n)
+    assert not set(n._MOVED_MODULES) & set(dir(n)) - set(vars(n))
     assert n.pipeline is importlib.import_module("platform_kit.notify.pipeline")
     with pytest.raises(AttributeError, match="no attribute 'Nope'"):
         _ = n.Nope
@@ -120,15 +121,51 @@ def _bare(code: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_the_box_planes_import_from_a_bare_checkout_without_platform_kit() -> None:
+    """The import succeeding is the check: under -S there is no platform_kit to find, so an eager
+    import of it anywhere on these paths fails here (proven by making notify import eagerly)."""
     r = _bare(
-        "import sys\n"
         "import edge_platform, edge_platform.notify, edge_platform.notify.cli, edge_platform.fence.cli\n"
         "import edge_platform.env.cli\n"
         "from edge_platform.fence import ClockBlind\n"
-        "assert 'platform_kit' not in sys.modules, 'platform_kit was imported'\n"
         "assert ClockBlind.__mro__[1] is RuntimeError, ClockBlind.__mro__\n"
         "print('ok')\n"
     )
+    assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr
+
+
+@pytest.mark.parametrize(
+    ("argv", "rcs"),
+    [
+        (["edge_platform.notify.cli", "check-pin"], {0}),
+        (["edge_platform.env.cli", "path", "sh"], {0}),
+        (["edge_platform.fence.cli", "status"], {0, 2}),  # 2 = blind (no zone data under -S off Linux)
+    ],
+)
+def test_the_box_clis_run_a_command_from_a_bare_checkout(argv: list[str], rcs: set[int]) -> None:
+    """A command body, not just the import: a lazy platform_kit import inside one would fail here."""
+    env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    r = subprocess.run([sys.executable, "-S", "-P", "-m", *argv], capture_output=True, text=True, env=env, check=False)
+    assert r.returncode in rcs and "Traceback" not in r.stderr, r.stderr
+
+
+def test_an_old_name_import_leaves_the_platform_kit_module_s_own_spec() -> None:
+    """The import system stamps the alias spec on the module it is handed; left there it breaks
+    `importlib.resources` and `reload` for both names. Fresh interpreter: import order matters."""
+    r = subprocess.run(
+        [sys.executable, "-W", "error", "-c",
+         "import importlib, importlib.resources as res\n"
+         "import edge_platform.service as es, edge_platform.config.knobs\n"
+         "import platform_kit.service as ps, platform_kit.config.knobs as pk\n"
+         "assert ps.__spec__.name == 'platform_kit.service' and pk.__spec__.name == 'platform_kit.config.knobs'\n"
+         "assert ps.__name__ == 'platform_kit.service' and list(ps.__path__)\n"
+         "assert res.files('platform_kit.service').joinpath('db.py').is_file()\n"
+         "importlib.reload(es)\n"
+         "assert list(ps.__path__) and ps.__spec__.name == 'platform_kit.service'\n"
+         "import platform_kit.service.admin_run, edge_platform.service.admin_run as a\n"
+         "assert a is platform_kit.service.admin_run\n"
+         "print('ok')\n"],
+        capture_output=True, text=True, check=False,
+    )  # fmt: skip
     assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr
 
 

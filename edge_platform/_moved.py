@@ -68,10 +68,25 @@ class _Alias(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         )
 
     def create_module(self, spec: importlib.machinery.ModuleSpec) -> ModuleType:
-        return importlib.import_module(target(spec.name) or spec.name)
+        module = importlib.import_module(target(spec.name) or spec.name)
+        spec.loader_state = module.__spec__  # the import system overwrites it next; exec_module restores it
+        return module
 
     def exec_module(self, module: ModuleType) -> None:
-        """Nothing to run: `create_module` returned the imported platform_kit module."""
+        """Nothing to run (`create_module` returned the imported platform_kit module), but put back
+        what the import system just stamped on it: `module_from_spec` always sets `__spec__` to the
+        alias spec, and left there it would break `importlib.resources` and `reload` for BOTH names
+        (an empty `__path__`, a loader with nothing to execute)."""
+        alias = module.__spec__
+        real = alias.loader_state if alias is not None else None
+        if not isinstance(real, importlib.machinery.ModuleSpec):  # pragma: no cover - create_module always sets it
+            return
+        module.__spec__ = real
+        module.__name__ = real.name
+        module.__loader__ = real.loader
+        module.__package__ = real.parent
+        if real.submodule_search_locations is not None:
+            module.__path__ = real.submodule_search_locations
 
     def get_code(self, fullname: str) -> CodeType | None:
         """For runpy (`python -m edge_platform.config`): the target module's code."""
