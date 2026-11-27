@@ -169,6 +169,38 @@ def test_an_old_name_import_leaves_the_platform_kit_module_s_own_spec() -> None:
     assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr
 
 
+@pytest.mark.parametrize("with_alias", [False, True])
+def test_a_partial_copy_of_the_planes_that_stayed_imports(tmp_path: Path, with_alias: bool) -> None:
+    """A box ships a subset (the root and `env/`, e.g. an observer's .env reader) with or without
+    `_moved.py`: both import under `-S -P`. Without it, an old moved name fails as missing."""
+    files = ["__init__.py", "env/__init__.py", "env/lib_env.py", *(["_moved.py"] if with_alias else [])]
+    for rel in files:
+        dst = tmp_path / "edge_platform" / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes((ROOT / "edge_platform" / rel).read_bytes())
+    env = {**os.environ, "PYTHONPATH": str(tmp_path)}
+    code = (
+        "import edge_platform, edge_platform.env.lib_env, sys\n"
+        f"assert any(type(f).__name__ == '_Alias' for f in sys.meta_path) is {with_alias}\n"
+        "try:\n    import edge_platform.registry\nexcept ModuleNotFoundError as e:\n    print('missing', e.name)\n"
+    )
+    r = subprocess.run([sys.executable, "-S", "-P", "-c", code], capture_output=True, text=True, env=env, check=False)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.split() == ["missing", "platform_kit" if with_alias else "edge_platform.registry"]
+
+
+def test_a_broken_alias_module_is_not_swallowed(tmp_path: Path) -> None:
+    """Only `_moved.py` being ABSENT is tolerated; an import error inside it still raises."""
+    pkg = tmp_path / "edge_platform"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_bytes((ROOT / "edge_platform" / "__init__.py").read_bytes())
+    (pkg / "_moved.py").write_text("import no_such_module_anywhere\n", encoding="utf-8")
+    env = {**os.environ, "PYTHONPATH": str(tmp_path)}
+    r = subprocess.run([sys.executable, "-S", "-P", "-c", "import edge_platform"], capture_output=True, text=True,
+                       env=env, check=False)  # fmt: skip
+    assert r.returncode == 1 and "no_such_module_anywhere" in r.stderr, r.stderr
+
+
 def test_a_moved_name_without_platform_kit_fails_naming_it() -> None:
     r = _bare("import edge_platform.registry")
     assert r.returncode == 1 and "No module named 'platform_kit'" in r.stderr, r.stderr

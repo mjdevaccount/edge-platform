@@ -3,11 +3,19 @@
 EDGE's shared platform package: the pieces every box and repo in the estate needs to agree on,
 in ONE versioned place instead of hand copies kept equal by comments.
 
+## v0.13.1
+
+- platform-kit 0.1.1 (its `[sql]` names primitives-kit by direct reference, not bare name: the
+  dependency-confusion fix); `[sql]` no longer pins primitives-kit itself.
+- A partial copy imports: a box that ships only the root and `env/` WITHOUT `_moved.py` still
+  imports them (only an old moved name then fails, as a missing module); an import error INSIDE
+  `_moved.py` still raises (`tests/test_moved.py`).
+
 ## v0.13.0: the general planes are platform-kit's
 
 The general half of this package -- `registry`, `stamp`, `sqlkit`, `budget`, `plugins`, `config`,
 `service`, `watch`, `testing` and notify's `types` / `pipeline` / `local` / `ledger` -- moved to
-[platform-kit](https://github.com/mjdevaccount/groundwork/tree/base/packages/platform-kit) 0.1.0,
+[platform-kit](https://github.com/mjdevaccount/groundwork/tree/base/packages/platform-kit) 0.1.1,
 which names no consumer. What stays here is the estate half: `fence`, `env`, notify's policy,
 publishers and CLI, `lanes`, `windmill`.
 
@@ -29,17 +37,18 @@ What a consumer can see change:
 - **`ClockBlind`**: notify raises platform-kit's; `edge_platform.fence.ClockBlind` now SUBCLASSES it
   (when platform-kit is installed). `except platform_kit.notify.types.ClockBlind` catches both; an
   `except edge_platform.fence.ClockBlind` no longer catches notify's.
-- **Extras**: `[config]` is new (typed config alone); `[service]` still carries it. `[sql]` pins
-  primitives-kit at the platform-kit tag (pip ignores uv sources and would otherwise ask PyPI).
+- **Extras**: `[config]` is new (typed config alone); `[service]` still carries it. `[sql]` brings
+  primitives-kit through platform-kit 0.1.1, whose wheel names it by a direct reference to its
+  release tag, so pip never asks an index (v0.13.0 pinned it here; v0.13.1 does not).
 - **Python >= 3.12** (platform-kit's floor). A 3.11 consumer stays on v0.12.0.
 - Typing: a type checker does not follow the alias; a consumer with `ignore_missing_imports` sees
   the old names as `Any` until it imports `platform_kit` itself.
-- **Pinning platform-kit beside this package (uv)**: write `rev = "platform-kit-v0.1.0"`, not
+- **Pinning platform-kit beside this package (uv)**: write `rev = "platform-kit-v0.1.1"`, not
   `tag = ...` -- this package's direct reference reads as a rev, and uv calls a tag source of the
   same commit a conflicting URL.
 - **`[sql]` beside a primitives-kit pin at its own tag** (market-ports pins one) is two URLs for one
   package and will not lock; the two trees are identical, so the consumer settles it with
-  `[tool.uv] override-dependencies = ["primitives-kit @ git+https://github.com/mjdevaccount/groundwork@platform-kit-v0.1.0#subdirectory=packages/primitives-kit"]`.
+  `[tool.uv] override-dependencies = ["primitives-kit @ git+https://github.com/mjdevaccount/groundwork@primitives-kit-v0.1.0#subdirectory=packages/primitives-kit"]`.
   `[service]` alone brings no primitives-kit.
 
 | tenant | what | status |
