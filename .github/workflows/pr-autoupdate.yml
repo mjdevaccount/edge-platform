@@ -34,11 +34,13 @@ on:
 
 # pull-requests/checks/statuses read: ci-kit reads the open-PR list (with check results)
 # with GITHUB_TOKEN -- GitHub refuses a fine-grained PAT the check runs (2026-10-24)
+# actions read: the heal reads a red check's workflow-run jobs (actions/runs/{id}/jobs) with it
 permissions:
   contents: read
   pull-requests: read
   checks: read
   statuses: read
+  actions: read
 
 concurrency:
   # one updater at a time, queued, never cancelled
