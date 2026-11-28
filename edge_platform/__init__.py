@@ -12,4 +12,4 @@ except ModuleNotFoundError as exc:  # pragma: no cover - exercised in a subproce
 else:
     _moved.install()
 
-__version__ = "0.13.1"
+__version__ = "0.14.0"

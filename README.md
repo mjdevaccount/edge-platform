@@ -3,6 +3,13 @@
 EDGE's shared platform package: the pieces every box and repo in the estate needs to agree on,
 in ONE versioned place instead of hand copies kept equal by comments.
 
+## v0.14.0
+
+- platform-kit 0.2.0: `plugins.collect` fills hookspec defaults and passes only the arguments an
+  impl names (an impl that does not take `register` is refused, as before); and the pack loader,
+  `platform_kit.packs`, behind the new `[packs]` extra (pluggy + pack-contracts 0.1.0). Import it
+  from `platform_kit.packs`: a new plane has no old `edge_platform` name.
+
 ## v0.13.1
 
 - platform-kit 0.1.1 (its `[sql]` names primitives-kit by direct reference, not bare name: the
@@ -43,7 +50,7 @@ What a consumer can see change:
 - **Python >= 3.12** (platform-kit's floor). A 3.11 consumer stays on v0.12.0.
 - Typing: a type checker does not follow the alias; a consumer with `ignore_missing_imports` sees
   the old names as `Any` until it imports `platform_kit` itself.
-- **Pinning platform-kit beside this package (uv)**: write `rev = "platform-kit-v0.1.1"`, not
+- **Pinning platform-kit beside this package (uv)**: write `rev = "platform-kit-v0.2.0"`, not
   `tag = ...` -- this package's direct reference reads as a rev, and uv calls a tag source of the
   same commit a conflicting URL.
 - **`[sql]` beside a primitives-kit pin at its own tag** (market-ports pins one) is two URLs for one
@@ -75,6 +82,7 @@ pip install "edge-platform[service] @ ..."   # a FastAPI service (platform-kit[s
 pip install "edge-platform[config] @ ..."    # typed config alone (platform-kit[config])
 pip install "edge-platform[sql] @ ..."       # the SQL stores: watch.state, notify.ledger, budget (platform-kit[sql]; you bring the driver)
 pip install "edge-platform[plugins] @ ..."   # the plugin loader + its conformance suite (platform-kit[plugins])
+pip install "edge-platform[packs] @ ..."     # the pack loader, platform_kit.packs (platform-kit[packs])
 ```
 
 ## env

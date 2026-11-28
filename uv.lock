@@ -343,7 +343,7 @@ wheels = [
 
 [[package]]
 name = "edge-platform"
-version = "0.13.1"
+version = "0.14.0"
 source = { editable = "." }
 dependencies = [
     { name = "platform-kit" },
@@ -361,6 +361,9 @@ db = [
 dlt = [
     { name = "dlt", extra = ["postgres"] },
     { name = "structlog" },
+]
+packs = [
+    { name = "platform-kit", extra = ["packs"] },
 ]
 plugins = [
     { name = "platform-kit", extra = ["plugins"] },
@@ -387,17 +390,18 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "dlt", extras = ["postgres"], marker = "extra == 'dlt'", specifier = ">=1.27.2" },
-    { name = "platform-kit", git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fplatform-kit&rev=platform-kit-v0.1.1" },
-    { name = "platform-kit", extras = ["config"], marker = "extra == 'config'", git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fplatform-kit&rev=platform-kit-v0.1.1" },
-    { name = "platform-kit", extras = ["plugins"], marker = "extra == 'plugins'", git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fplatform-kit&rev=platform-kit-v0.1.1" },
-    { name = "platform-kit", extras = ["service"], marker = "extra == 'service'", git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fplatform-kit&rev=platform-kit-v0.1.1" },
-    { name = "platform-kit", extras = ["sql"], marker = "extra == 'sql'", git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fplatform-kit&rev=platform-kit-v0.1.1" },
+    { name = "platform-kit", git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fplatform-kit&rev=platform-kit-v0.2.0" },
+    { name = "platform-kit", extras = ["config"], marker = "extra == 'config'", git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fplatform-kit&rev=platform-kit-v0.2.0" },
+    { name = "platform-kit", extras = ["packs"], marker = "extra == 'packs'", git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fplatform-kit&rev=platform-kit-v0.2.0" },
+    { name = "platform-kit", extras = ["plugins"], marker = "extra == 'plugins'", git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fplatform-kit&rev=platform-kit-v0.2.0" },
+    { name = "platform-kit", extras = ["service"], marker = "extra == 'service'", git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fplatform-kit&rev=platform-kit-v0.2.0" },
+    { name = "platform-kit", extras = ["sql"], marker = "extra == 'sql'", git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fplatform-kit&rev=platform-kit-v0.2.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'db'", specifier = ">=3.2" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "structlog", marker = "extra == 'dlt'", specifier = ">=24.4" },
     { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2025.2" },
 ]
-provides-extras = ["db", "service", "config", "sql", "plugins", "dlt"]
+provides-extras = ["db", "service", "config", "sql", "plugins", "packs", "dlt"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -792,6 +796,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pack-contracts"
+version = "0.1.0"
+source = { git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fpack-contracts&rev=platform-kit-v0.2.0#ec39675299edd1110b013a8ef83c3a98b6127202" }
+dependencies = [
+    { name = "pluggy" },
+    { name = "pydantic" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.4"
 source = { registry = "https://pypi.org/simple" }
@@ -942,8 +955,8 @@ wheels = [
 
 [[package]]
 name = "platform-kit"
-version = "0.1.1"
-source = { git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fplatform-kit&rev=platform-kit-v0.1.1#7067aaa0eb6516292594b2bb15777b4d72416f5d" }
+version = "0.2.0"
+source = { git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fplatform-kit&rev=platform-kit-v0.2.0#ec39675299edd1110b013a8ef83c3a98b6127202" }
 dependencies = [
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
@@ -952,6 +965,10 @@ dependencies = [
 config = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
+]
+packs = [
+    { name = "pack-contracts" },
+    { name = "pluggy" },
 ]
 plugins = [
     { name = "pluggy" },
@@ -980,7 +997,7 @@ wheels = [
 [[package]]
 name = "primitives-kit"
 version = "0.1.0"
-source = { git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fprimitives-kit&rev=platform-kit-v0.1.1#7067aaa0eb6516292594b2bb15777b4d72416f5d" }
+source = { git = "https://github.com/mjdevaccount/groundwork?subdirectory=packages%2Fprimitives-kit&rev=platform-kit-v0.2.0#ec39675299edd1110b013a8ef83c3a98b6127202" }
 dependencies = [
     { name = "pydantic" },
 ]
